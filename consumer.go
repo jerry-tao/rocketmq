@@ -22,9 +22,10 @@ type MessageListener func(msgs []*MessageExt) error
 var DefaultIp = GetLocalIp4()
 
 type Config struct {
-	Namesrv      string
-	ClientIp     string
-	InstanceName string
+	Namesrv       string
+	ClientIp      string
+	InstanceName  string
+	EnableUniqKey bool
 }
 
 type Consumer interface {
@@ -197,7 +198,7 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 						if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
 							nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
 							if err != nil {
-								fmt.Println(err)
+								logger.Error(err)
 								return
 							}
 						}
@@ -207,14 +208,14 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 				msgs := decodeMessage(responseFuture.responseCommand.Body)
 				err = c.messageListener(msgs)
 				if err != nil {
-					fmt.Println(err)
+					logger.Error(err)
 					//TODO retry
 				} else {
 					c.offsetStore.updateOffset(pullRequest.messageQueue, nextBeginOffset, false)
 				}
 			} else if responseCommand.Code == PullNotFound {
 			} else if responseCommand.Code == PullRetryImmediately || responseCommand.Code == PullOffsetMoved {
-				fmt.Printf("pull message error,code=%d,request=%v", responseCommand.Code, requestHeader)
+				logger.Infof("pull message error,code=%d,request=%v", responseCommand.Code, requestHeader)
 				var err error
 				pullResult, ok := responseCommand.ExtFields.(map[string]interface{})
 				if ok {
@@ -222,19 +223,19 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 						if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
 							nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
 							if err != nil {
-								fmt.Println(err)
+								logger.Error(err)
 							}
 						}
 					}
 				}
 				//time.Sleep(1 * time.Second)
 			} else {
-				fmt.Println(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
-				fmt.Println(pullRequest.messageQueue)
+				logger.Info(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
+				logger.Info(pullRequest.messageQueue)
 				time.Sleep(1 * time.Second)
 			}
 		} else {
-			fmt.Println("responseFuture is nil")
+			logger.Info("responseFuture is nil")
 		}
 
 		nextPullRequest := &PullRequest{
@@ -254,7 +255,7 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 		remotingCommand.Code = PullMsg
 		remotingCommand.Opaque = currOpaque
 		remotingCommand.Flag = 0
-		remotingCommand.Language = "JAVA"
+		remotingCommand.Language = Language
 		remotingCommand.Version = 79
 
 		remotingCommand.ExtFields = requestHeader

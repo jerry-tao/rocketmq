@@ -32,6 +32,8 @@ const (
 	CidOnsapiPullGroup       = "CID_ONSAPI_PULL"
 	CidRmqSysPerfix          = "CID_RMQ_SYS_"
 
+	Language = "GOLANG"
+
 	Localhost      = "127.0.0.1"
 	DefaultCharset = "UTF-8"
 	MasterId       = 0

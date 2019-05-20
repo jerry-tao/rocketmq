@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -43,6 +44,7 @@ type DefaultProducer struct {
 	remotingClient                   RemotingClient
 	mqClient                         *MqClient
 	topicPublishInfoTable            map[string]*TopicPublishInfo
+	topicPublishInfoLock             sync.RWMutex
 	instanceName                     string
 	sendMsgTimeout                   int64
 	serviceState                     int
@@ -207,7 +209,7 @@ func (d *DefaultProducer) send(msg *Message, communicationMode int, sendCallback
 				case Oneway:
 					return
 				case Sync:
-					if sendResult.sendStatus != SendStatusOK {
+					if err != nil || sendResult.sendStatus != SendStatusOK {
 						if d.retryAnotherBrokerWhenNotStoreOK {
 							continue
 						}
@@ -219,10 +221,7 @@ func (d *DefaultProducer) send(msg *Message, communicationMode int, sendCallback
 		}
 	}
 
-	if d.remotingClient.getNameServerAddressList() == nil || len(d.remotingClient.getNameServerAddressList()) == 0 {
-		err = errors.New("no name server address, please set it")
-	}
-	err = fmt.Errorf("No route info of this topic, %s" + msg.Topic)
+	err = fmt.Errorf("no route info of this topic, %s", msg.Topic)
 	return
 }
 
@@ -232,8 +231,14 @@ func (d *DefaultProducer) getRetryTimesWhenSendFailed() int {
 
 func (d *DefaultProducer) tryToFindTopicPublishInfo(topic string) (topicPublishInfo *TopicPublishInfo) {
 	ok := false
-	if topicPublishInfo, ok = d.topicPublishInfoTable[topic]; !ok || !topicPublishInfo.ok() {
-		d.topicPublishInfoTable[topic] = NewTopicPublishInfo()
+
+	d.topicPublishInfoLock.RLock()
+	topicPublishInfo, ok = d.topicPublishInfoTable[topic]
+	d.topicPublishInfoLock.RUnlock()
+
+	// TODO 锁有问题，会多次连接。
+	if !ok || !topicPublishInfo.ok() {
+		d.updateTopicPublishInfo(topic, NewTopicPublishInfo())
 		d.mqClient.updateTopicRouteInfoFromNameServerKernel(topic, false, DefaultProducer{})
 		topicPublishInfo = d.topicPublishInfoTable[topic]
 	}
@@ -259,7 +264,9 @@ func (d *DefaultProducer) sendKernel(msg *Message, mq *MessageQueue, communicati
 		brokerAddr = BrokerVIPChannel(d.vipChannelEnabled, brokerAddr)
 		prevBody := msg.Body
 
-		MessageClientIDSetter.setUniqID(msg)
+		if d.conf.EnableUniqKey {
+			MessageClientIDSetter.setUniqID(msg)
+		}
 
 		sysFlag := 0
 		if d.tryToCompressMessage(msg) {
@@ -272,7 +279,7 @@ func (d *DefaultProducer) sendKernel(msg *Message, mq *MessageQueue, communicati
 		}
 
 		if d.hasCheckForbiddenHook() {
-			fmt.Fprintf(os.Stderr, brokerAddr)
+			logger.Error(brokerAddr)
 		}
 		if d.hasSendMessageHook() {
 		}
@@ -368,7 +375,7 @@ func (d *DefaultProducer) sendMessage(addr string, brokerName string, msg *Messa
 	currOpaque := atomic.AddInt32(&opaque, 1)
 	remotingCommand.Opaque = currOpaque
 	remotingCommand.Flag = 0
-	remotingCommand.Language = "JAVA"
+	remotingCommand.Language = Language
 	remotingCommand.Version = 79
 	remotingCommand.ExtFields = requestHeader
 	remotingCommand.Body = msg.Body
@@ -389,9 +396,9 @@ func (d *DefaultProducer) sendMessage(addr string, brokerName string, msg *Messa
 
 func (d *DefaultProducer) sendMessageSync(addr string, brokerName string, msg *Message, timeoutMillis int64, remotingCommand *RemotingCommand) (sendResult *SendResult, err error) {
 	var response *RemotingCommand
-	fmt.Fprintln(os.Stderr, "msg:", msg.Topic, msg.Flag, string(msg.Body), msg.Properties)
+	logger.Info("msg:", msg.Topic, msg.Flag, string(msg.Body), msg.Properties)
 	if response, err = d.remotingClient.invokeSync(addr, remotingCommand, timeoutMillis); err != nil {
-		fmt.Fprintln(os.Stderr, "sendMessageSync err", err)
+		logger.Error("sendMessageSync err ", err)
 	}
 	return d.processSendResponse(brokerName, msg, response)
 }
@@ -416,7 +423,7 @@ func (d *DefaultProducer) sendMessageAsync(addr string, brokerName string, msg *
 		sendCallback()
 		if responseCommand != nil {
 			if sendResult, err = d.processSendResponse(brokerName, msg, responseCommand); sendResult == nil || err != nil {
-				fmt.Fprintln(os.Stderr, "sendResult can't be null, error ", err)
+				logger.Error("sendResult can't be null, error ", err)
 				producer.updateFaultItem(brokerName, time.Now().Unix()-responseFuture.beginTimestamp, true)
 				return
 			} else {
@@ -477,6 +484,10 @@ func (d *DefaultProducer) updateFaultItem(brokerName string, currentLatency int6
 
 func (d *DefaultProducer) getPublishTopicList() (topicList []string) {
 	topicList = make([]string, 0)
+
+	d.topicPublishInfoLock.RLock()
+	defer d.topicPublishInfoLock.RUnlock()
+
 	for topic := range d.topicPublishInfoTable {
 		topicList = append(topicList, topic)
 	}
@@ -490,6 +501,8 @@ func (d *DefaultProducer) isPublishTopicNeedUpdate(topic string) bool {
 }
 
 func (d *DefaultProducer) updateTopicPublishInfo(topic string, topicPublishInfo *TopicPublishInfo) {
+	d.topicPublishInfoLock.Lock()
+	defer d.topicPublishInfoLock.Unlock()
 	if topic != "" {
 		d.topicPublishInfoTable[topic] = topicPublishInfo
 	}

@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"strconv"
 )
@@ -18,6 +17,7 @@ const (
 	TransactionPreparedType = (0x1 << 2)
 	TransactionCommitType   = (0x2 << 2)
 	TransactionRollbackType = (0x3 << 2)
+	UniqKey                 = "UNIQ_KEY"
 )
 
 const (
@@ -101,20 +101,20 @@ func decodeMessage(data []byte) []*MessageExt {
 				b := bytes.NewReader(body)
 				z, err := zlib.NewReader(b)
 				if err != nil {
-					fmt.Println(err)
+					logger.Error(err)
 					return nil
 				}
 				defer z.Close()
 				body, err = ioutil.ReadAll(z)
 				if err != nil {
-					fmt.Println(err)
+					logger.Error(err)
 					return nil
 				}
 			}
 
 		}
 		binary.Read(buf, binary.BigEndian, &topicLen)
-		topic = make([]byte, 0)
+		topic = make([]byte, int(topicLen))
 		binary.Read(buf, binary.BigEndian, &topic)
 		binary.Read(buf, binary.BigEndian, &propertiesLength)
 		if propertiesLength > 0 {
@@ -125,7 +125,7 @@ func decodeMessage(data []byte) []*MessageExt {
 		}
 
 		if magicCode != -626843481 {
-			fmt.Printf("magic code is error %d", magicCode)
+			logger.Infof("magic code is error %d", magicCode)
 			return nil
 		}
 
@@ -185,4 +185,12 @@ func checkTopic(topic string) (err error) {
 		err = errors.New("the topic[" + topic + "] is conflict with default topic")
 	}
 	return
+}
+
+func (m *Message) SetProperty(key, value string) {
+	m.Properties[key] = value
+}
+
+func (m *Message) GetProperty(key string) string {
+	return m.Properties[key]
 }

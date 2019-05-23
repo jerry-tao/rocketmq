@@ -105,7 +105,7 @@ func (d *DefaultRemotingClient) connect(addr string) (conn net.Conn, err error) 
 		}
 
 		d.connTable[addr] = conn
-		logger.Error("connect to:", addr)
+		logger.Info("connect to:", addr)
 		go d.handlerConn(conn, addr)
 	}
 	return conn, nil
@@ -315,7 +315,7 @@ func (d *DefaultRemotingClient) handlerConn(conn net.Conn, addr string) {
 }
 
 func (d *DefaultRemotingClient) sendRequest(header, body []byte, conn net.Conn, addr string) error {
-
+	//log.Debug("send request to addr")
 	buf := bytes.NewBuffer([]byte{})
 	binary.Write(buf, binary.BigEndian, int32(len(header)+len(body)+4))
 	binary.Write(buf, binary.BigEndian, int32(len(header)))

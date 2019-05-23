@@ -494,7 +494,7 @@ func (m *MqClient) sendHeartbeatToAllBrokerWithLock() error {
 				return err
 			}
 			remotingCommand.Body = data
-			logger.Error("send heartbeat to broker[", addr+"]")
+			logger.Info("send heartbeat to broker[", addr+"]")
 			response, err := m.remotingClient.invokeSync(addr, remotingCommand, 3000)
 			if err != nil {
 				logger.Error(err)

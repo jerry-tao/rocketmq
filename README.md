@@ -170,7 +170,7 @@ Or enable auto generate by config:
 
 ```
 conf := &rocketmq.Config{
-    Namesrv:       "172.17.5.201:9876;172.17.5.203:9876",
+    Namesrv:       "",
     InstanceName:  "DEFAULT",
     EnableUniqKey: true,
 }
@@ -183,8 +183,23 @@ msg := NewMessage(topic, []byte("Hello RocketMQ!")
 msg.GetProperty(rocketmq.UNIQ_KEY)
 ```
 
+### PullMsgNums 
+
+```
+// consumer config
+conf := &rocketmq.Config{
+    Namesrv:        "",
+    InstanceName:   "DEFAULT",
+    PullMaxMsgNums: -32,
+}
+```
+
 **Notice: the auto generated uniqKey still have some bug, now you can consider it as random string.**
 
 ## Todo 
 
 - Testing
+- Data Race
+- Improvement performance(consumer too slow)
+    - ~~Add pull msg nums~~
+- Split producer/Consumer config    

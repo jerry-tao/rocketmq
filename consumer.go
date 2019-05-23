@@ -26,6 +26,7 @@ type Config struct {
 	ClientIp      string
 	InstanceName  string
 	EnableUniqKey bool
+	PullMaxMsgNums int32 // MIN 1 小于1的会当做1 MAX 32 超过32的数字会被当做32对待
 }
 
 type Consumer interface {
@@ -179,6 +180,7 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 	requestHeader.SysFlag = sysFlag
 	requestHeader.CommitOffset = commitOffsetValue
 	requestHeader.SuspendTimeoutMillis = BrokerSuspendMaxTimeMillis
+	requestHeader.MaxMsgNums = c.conf.PullMaxMsgNums
 
 	if ok {
 		requestHeader.SubVersion = subVersion

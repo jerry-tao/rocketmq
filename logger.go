@@ -42,12 +42,10 @@ type defaultLogger struct {
 	level  int
 	format string
 	out    io.Writer
-	r      strings.Replacer
 	pid    string
 }
 
 func (l *defaultLogger) formatLog(level int, log string) string {
-
 	tmp := strings.Replace(l.format, "%time", time.Now().Format("2006-01-02T15:04:05"), -1)
 	tmp = strings.Replace(tmp, "%log", log, -1)
 	tmp = strings.Replace(tmp, "%level", levelString[level], -1)

@@ -144,7 +144,7 @@ func (r *Rebalance) rebalanceByTopic(topic string) error {
 		return err
 	}
 
-	logger.Infof("rebalance topic[%s]\n", topic)
+	logger.Infof("rebalance topic[%s]", topic)
 	r.updateProcessQueueTableInRebalance(topic, allocateResult)
 	return nil
 }

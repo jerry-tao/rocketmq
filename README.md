@@ -1,8 +1,10 @@
 ## Introduction
 
-A RocketMQ client for golang supportting producer and consumer.
+A RocketMQ client for golang supporting producer and consumer.
 
 This is forked from https://github.com/sevennt/rocketmq.
+
+Now this project is still in testing.
 
 
 ## Feature unsupport
@@ -17,7 +19,9 @@ The compress is on client, you can simple compress it by your self. If you reall
 
 ### Msg Filter @TBD
 
-### Batch send @TBD
+### Batch send
+
+No plan.
 
 ## Import package
 
@@ -30,107 +34,41 @@ import "github.com/jerry-tao/rocketmq"
 ### Getting message with consumer
 
 ```
-group := "dev-VodHotClacSrcData"
-topic := "canal_vod_collect__video_collected_count_live"
-var timeSleep = 30 * time.Second
 conf := &rocketmq.Config{
-    Nameserver:   "192.168.7.101:9876;192.168.7.102:9876;192.168.7.103:9876",
-    ClientIp:     "192.168.1.23",
-    InstanceName: "DEFAULT",
-}
+		Namesrv:        "192.168.0.101:9876;192.168.0.102:9876",
+		InstanceName:   strconv.Itoa(i),
+		PullMaxMsgNums: 32,
+		Group:          "test_topic",
+	}
 
-consumer, err := rocketmq.NewDefaultConsumer(consumerGroup, consumerConf)
-if err != nil {
-    return err
-}
-consumer.Subscribe(consumerTopic, "*")
+consumer, _ := rocketmq.NewDefaultConsumer(conf)
+consumer.Subscribe("test_topic", "*")
 consumer.RegisterMessageListener(
-    func(msgs []*MessageExt) error {
-        for i, msg := range msgs {
-            logger.Info("msg", i, msg.Topic, msg.Flag, msg.Properties, string(msg.Body))
+    func(msgs []*rocketmq.MessageExt) error {
+        a := atomic.AddInt64(&amount, int64(len(msgs)))
+        if a%100000 == 0 {
+            log.Println("run time: ", time.Since(now), "produce: ", a)
         }
-        logger.Info("Consume success!")
         return nil
     })
 consumer.Start()
-
-time.Sleep(timeSleep)
 ```
 
 ### Sending message with producer
 
-- Synchronous sending
 ```
-group := "dev-VodHotClacSrcData"
-topic := "canal_vod_collect__video_collected_count_live"
 conf := &rocketmq.Config{
-    Nameserver:   "192.168.7.101:9876;192.168.7.102:9876;192.168.7.103:9876",
-    ClientIp:     "192.168.1.23",
-    InstanceName: "DEFAULT",
+    Namesrv:               "192.168.0.101:9876;192.168.0.102:9876",
+    EnableUniqKey:         true,
+    Group:                 "final",
+    DefaultTopicQueueNums: 16,
 }
-
-producer, err := rocketmq.NewDefaultProducer(group, conf)
+producer, _ := rocketmq.NewDefaultProducer(conf)
 producer.Start()
-if err != nil {
-    return errors.New("NewDefaultProducer err")
-}
-msg := NewMessage(topic, []byte("Hello RocketMQ!")
-if sendResult, err := producer.Send(msg); err != nil {
-    return errors.New("Sync sending fail!")
-} else {
-    logger.Info("Sync sending success!, ", sendResult)
-}
+msg := rocketmq.NewMessage(topic, []byte("2myq"+strconv.Itoa(int(value))))
+r, e := cli.Send(msg)
 ```
 
-- Asynchronous sending
-
-```
-group := "dev-VodHotClacSrcData"
-topic := "canal_vod_collect__video_collected_count_live"
-conf := &rocketmq.Config{
-    Nameserver:   "192.168.7.101:9876;192.168.7.102:9876;192.168.7.103:9876",
-    ClientIp:     "192.168.1.23",
-    InstanceName: "DEFAULT",
-}
-producer, err := rocketmq.NewDefaultProducer(group, conf)
-producer.Start()
-if err != nil {
-    return err
-}
-msg := NewMessage(topic, []byte("Hello RocketMQ!")
-sendCallback := func() error {
-    logger.Info("I am callback")
-    return nil
-}
-if err := producer.SendAsync(msg, sendCallback); err != nil {
-    return err
-} else {
-    logger.Info("Async sending success!")
-}
-```
-
-- Oneway sending
-
-```
-group := "dev-VodHotClacSrcData"
-topic := "canal_vod_collect__video_collected_count_live"
-conf := &rocketmq.Config{
-    Nameserver:   "192.168.7.101:9876;192.168.7.102:9876;192.168.7.103:9876",
-    ClientIp:     "192.168.1.23",
-    InstanceName: "DEFAULT",
-}
-producer, err := rocketmq.NewDefaultProducer(group, conf)
-producer.Start()
-if err != nil {
-    return err
-}
-msg := NewMessage(topic, []byte("Hello RocketMQ!")
-if err := producer.SendOneway(msg); err != nil {
-    return err
-} else {
-    logger.Info("Oneway sending success!")
-}
-```
 
 ## Other
 
@@ -201,7 +139,6 @@ msg.GetProperty(rocketmq.UNIQ_KEY)
 // consumer config
 conf := &rocketmq.Config{
     Namesrv:        "",
-    InstanceName:   "DEFAULT",
     PullMaxMsgNums: 32,
 }
 ```
@@ -217,15 +154,15 @@ consumer.Shutdown()
 
 **Don't shutdown consumer in message callback, consumer shutdown will wait all callback finish, since callback is waiting consumer shutdown, it will cause a loop dead block.**
 
+TODO: now shutdown will wait until server close the connection, so it could be long.
+
 ## Todo 
 
 - Testing
 - Data Race
-- Improvement performance(consumer too slow)
+- ~~Improvement performance(consumer too slow)~~
     - ~~Add pull msg nums~~
-- Split producer/Consumer config    
 - ~~Consumer graceful shutdown~~
 - ~~Consumer reblance error~~
 - Response timeout fix
 - Vip channel
-- 多个测试有影响

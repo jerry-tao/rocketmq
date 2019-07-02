@@ -2,13 +2,22 @@
 
 A RocketMQ client for golang supportting producer and consumer.
 
-This is forked from https://github.com/sevennt/rocketmq. And fix some bugs.
+This is forked from https://github.com/sevennt/rocketmq.
 
-- Producer concurrency bug.
-- Producer uniq_key bug.
-- Consumer lack of topic bug.
-- Replace fmt with logger.
-- Some other typo or minor fix.
+
+## Feature unsupport
+
+### Producer Oneway
+
+During test, i found it highly unreliable, when keep pushing msg to server, if server can't handle it, it will simply drop the msg, the drop ratio is very high around 10~30%, so unless you really don't care send it or not, otherwise you should never use oneway.
+
+### Flag compress
+
+The compress is on client, you can simple compress it by your self. If you really need the feature, you can wrap producer and consumer, more easy way.
+
+### Msg Filter @TBD
+
+### Batch send @TBD
 
 ## Import package
 
@@ -180,8 +189,11 @@ Then you can get it later:
 
 ```
 msg := NewMessage(topic, []byte("Hello RocketMQ!")
+// after send
 msg.GetProperty(rocketmq.UNIQ_KEY)
 ```
+
+**Notice: the auto generated uniqKey still have some bug, now you can consider it as random string.**
 
 ### PullMsgNums 
 
@@ -190,11 +202,20 @@ msg.GetProperty(rocketmq.UNIQ_KEY)
 conf := &rocketmq.Config{
     Namesrv:        "",
     InstanceName:   "DEFAULT",
-    PullMaxMsgNums: -32,
+    PullMaxMsgNums: 32,
 }
 ```
 
-**Notice: the auto generated uniqKey still have some bug, now you can consider it as random string.**
+**The range for pullMaxMsgNums is 1~32**
+
+
+### Graceful shutdown consumer
+
+```
+consumer.Shutdown()
+```
+
+**Don't shutdown consumer in message callback, consumer shutdown will wait all callback finish, since callback is waiting consumer shutdown, it will cause a loop dead block.**
 
 ## Todo 
 
@@ -203,3 +224,8 @@ conf := &rocketmq.Config{
 - Improvement performance(consumer too slow)
     - ~~Add pull msg nums~~
 - Split producer/Consumer config    
+- ~~Consumer graceful shutdown~~
+- ~~Consumer reblance error~~
+- Response timeout fix
+- Vip channel
+- 多个测试有影响

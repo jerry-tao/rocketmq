@@ -41,6 +41,7 @@ type defaultLogger struct {
 	m      sync.Mutex
 	level  int
 	format string
+	prefix string
 	out    io.Writer
 	pid    string
 }
@@ -68,10 +69,10 @@ func (l *defaultLogger) formatLog(level int, log string) string {
 
 func (l *defaultLogger) output(level int, log string) {
 	l.m.Lock()
-	l.m.Unlock()
+	defer l.m.Unlock()
 	if l.level >= level {
 		log = l.formatLog(level, log)
-		_, _ = l.out.Write([]byte(log))
+		_, _ = l.out.Write([]byte(l.prefix + log))
 	}
 }
 
@@ -139,6 +140,7 @@ func newDefaultLogger() *defaultLogger {
 		level:  DefaultLevel,
 		format: DefaultFormat,
 		out:    os.Stdout,
+		prefix: "rocketmq: ",
 		pid:    strconv.Itoa(os.Getpid()),
 	}
 }

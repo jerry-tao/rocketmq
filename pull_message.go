@@ -1,9 +1,21 @@
 package rocketmq
 
+import "strconv"
+
+const (
+	defaultSuspend = 1000      // 1s
+	maxSuspend     = 16 * 1000 // 16s
+)
+
 type PullRequest struct {
 	consumerGroup string
-	messageQueue  *MessageQueue
+	messageQueue  *messageQueue
 	nextOffset    int64
+	suspend       int64
+}
+
+func (pr *PullRequest) String() string {
+	return pr.messageQueue.String() + ":" + strconv.FormatInt(pr.nextOffset, 10)
 }
 
 type PullMessageRequestHeader struct {

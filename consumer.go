@@ -2,10 +2,8 @@ package rocketmq
 
 import (
 	"fmt"
-	"net"
-	"os"
 	"strconv"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -19,99 +17,96 @@ const (
 
 type MessageListener func(msgs []*MessageExt) error
 
-var DefaultIp = GetLocalIp4()
-
-type Config struct {
-	Namesrv       string
-	ClientIp      string
-	InstanceName  string
-	EnableUniqKey bool
-	PullMaxMsgNums int32 // MIN 1 小于1的会当做1 MAX 32 超过32的数字会被当做32对待
-}
-
 type Consumer interface {
 	Start() error
-	Shutdown()
+	Shutdown() bool
 	RegisterMessageListener(listener MessageListener)
 	Subscribe(topic string, subExpression string)
-	UnSubscribe(topic string)
-	SendMessageBack(msg MessageExt, delayLevel int) error
-	SendMessageBack1(msg MessageExt, delayLevel int, brokerName string) error
-	fetchSubscribeMessageQueues(topic string) error
+	//UnSubscribe(topic string)
 }
 
 type DefaultConsumer struct {
-	conf             *Config
-	consumerGroup    string
-	consumeFromWhere string
-	consumerType     string
-	messageModel     string
-	unitMode         bool
-	subscription     map[string]string
-	messageListener  MessageListener
-	offsetStore      OffsetStore
-	brokers          map[string]net.Conn
-	rebalance        *Rebalance
-	remotingClient   RemotingClient
-	mqClient         *MqClient
+	conf               *Config
+	consumerGroup      string
+	consumeFromWhere   string
+	consumerType       string
+	messageModel       string
+	unitMode           bool
+	messageListener    MessageListener
+	offsetStore        OffsetStore
+	pullMessageService *PullMessageService
+	rebalance          *Rebalance
+	mqClient           mqClient
+	running            bool
+	m                  sync.Mutex
+	closeCh            chan struct{}
+	wg                 sync.WaitGroup
 }
 
-func NewDefaultConsumer(consumerGroup string, conf *Config) (Consumer, error) {
-	if conf == nil {
-		conf = &Config{
-			Namesrv:      os.Getenv("ROCKETMQ_NAMESVR"),
-			InstanceName: "DEFAULT",
-		}
+func NewDefaultConsumer(conf *Config) (Consumer, error) {
+	err := validConfig(conf)
+	if err != nil {
+		return nil, err
 	}
-
-	if conf.ClientIp == "" {
-		conf.ClientIp = DefaultIp
-	}
-
-	remotingClient := NewDefaultRemotingClient()
-	mqClient := NewMqClient()
-
-	rebalance := NewRebalance()
-	rebalance.groupName = consumerGroup
-	rebalance.mqClient = mqClient
-
-	offsetStore := new(RemoteOffsetStore)
-	offsetStore.mqClient = mqClient
-	offsetStore.groupName = consumerGroup
-	offsetStore.offsetTable = make(map[MessageQueue]int64)
 
 	pullMessageService := NewPullMessageService()
+	mqClient := newMqClient(conf)
+	rebalance := NewRebalance(conf.Group, mqClient)
 
 	consumer := &DefaultConsumer{
-		conf:             conf,
-		consumerGroup:    consumerGroup,
-		consumeFromWhere: "CONSUME_FROM_LAST_OFFSET",
-		subscription:     make(map[string]string),
-		offsetStore:      offsetStore,
-		brokers:          make(map[string]net.Conn),
-		rebalance:        rebalance,
-		remotingClient:   remotingClient,
-		mqClient:         mqClient,
+		conf:               conf,
+		pullMessageService: pullMessageService,
+		consumerGroup:      conf.Group,
+		consumeFromWhere:   "CONSUME_FROM_LAST_OFFSET",
+		messageModel:       "CLUSTERING",
+		offsetStore:        newOffsetStore(mqClient, conf.Group),
+		rebalance:          rebalance,
+		mqClient:           mqClient,
+		closeCh:            make(chan struct{}),
 	}
-
-	mqClient.consumerTable[consumerGroup] = consumer
-	mqClient.remotingClient = remotingClient
-	mqClient.conf = conf
-	mqClient.clientId = conf.ClientIp + "@" + strconv.Itoa(os.Getpid())
-	mqClient.pullMessageService = pullMessageService
 
 	rebalance.consumer = consumer
 	pullMessageService.service = consumer
-
 	return consumer, nil
 }
 
 func (c *DefaultConsumer) Start() error {
+	c.running = true
+	c.mqClient.registerConsumer(c)
 	c.mqClient.start()
+	go c.pullMessageService.start()
+	c.rebalance.start()
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		rebalanceTimer := time.NewTimer(60 * time.Second)
+		rflag := true
+		for rflag {
+			select {
+			case <-rebalanceTimer.C:
+				c.doRebalance()
+				rebalanceTimer.Reset(60 * time.Second)
+			case <-c.closeCh:
+				rflag = false
+			}
+		}
+	}()
 	return nil
 }
 
-func (c *DefaultConsumer) Shutdown() {
+func (c *DefaultConsumer) Shutdown() bool {
+	c.m.Lock()
+	defer c.m.Unlock()
+	if c.running {
+		//TODO unlock mq
+		c.running = false
+		close(c.closeCh)
+		c.wg.Wait()                // 等待所有goroutine退出
+		c.offsetStore.persistAll() // 最后更新offset
+		c.mqClient.shutdown()
+		return true
+	}
+	return false
 }
 
 func (c *DefaultConsumer) RegisterMessageListener(messageListener MessageListener) {
@@ -119,8 +114,6 @@ func (c *DefaultConsumer) RegisterMessageListener(messageListener MessageListene
 }
 
 func (c *DefaultConsumer) Subscribe(topic string, subExpression string) {
-	c.subscription[topic] = subExpression
-
 	subData := &SubscriptionData{
 		Topic:     topic,
 		SubString: subExpression,
@@ -128,28 +121,97 @@ func (c *DefaultConsumer) Subscribe(topic string, subExpression string) {
 	c.rebalance.subscriptionInner[topic] = subData
 }
 
-func (c *DefaultConsumer) UnSubscribe(topic string) {
-	delete(c.subscription, topic)
-}
+func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback {
+	return func(responseFuture *ResponseFuture) {
+		if !c.running {
+			return
+		}
 
-func (c *DefaultConsumer) SendMessageBack(msg MessageExt, delayLevel int) error {
-	return nil
-}
+		if responseFuture == nil {
+			logger.Error("response nil")
+			return
+		}
 
-func (c *DefaultConsumer) SendMessageBack1(msg MessageExt, delayLevel int, brokerName string) error {
-	return nil
-}
+		if responseFuture.err != nil {
+			logger.Error("pull message error,", pullRequest, responseFuture.err)
+			return
+		}
 
-func (c *DefaultConsumer) fetchSubscribeMessageQueues(topic string) error {
-	return nil
+		var nextBeginOffset = pullRequest.nextOffset
+
+		responseCommand := responseFuture.responseCommand
+		if responseCommand.Code == Success && len(responseCommand.Body) > 0 {
+			pullRequest.suspend = defaultSuspend
+			var err error
+			pullResult, ok := responseCommand.ExtFields.(map[string]interface{})
+			if ok {
+				if nextBeginOffsetInter, ok := pullResult["nextBeginOffset"]; ok {
+					if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
+						nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
+						if err != nil {
+							logger.Error(err)
+							return
+						}
+					}
+				}
+			}
+
+			msgs := decodeMessage(responseFuture.responseCommand.Body)
+			err = c.messageListener(msgs)
+			if err != nil {
+				logger.Error(err)
+			} else {
+				c.offsetStore.updateOffset(pullRequest.messageQueue, nextBeginOffset, false)
+			}
+		} else if responseCommand.Code == PullNotFound {
+			// 当前无消息，sleep 1~16s
+			logger.Infof("No new message sleep %d ms", pullRequest.suspend)
+			time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
+			if pullRequest.suspend < maxSuspend {
+				pullRequest.suspend = pullRequest.suspend * 2
+			}
+		} else if responseCommand.Code == PullRetryImmediately || responseCommand.Code == PullOffsetMoved {
+			logger.Infof("pull message error,code=%d,request=%v", responseCommand.Code, pullRequest)
+			var err error
+			pullResult, ok := responseCommand.ExtFields.(map[string]interface{})
+			if ok {
+				if nextBeginOffsetInter, ok := pullResult["nextBeginOffset"]; ok {
+					if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
+						nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
+						if err != nil {
+							logger.Error(err)
+						}
+					}
+				}
+			}
+		} else {
+			logger.Error(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
+			time.Sleep(1 * time.Second)
+		}
+
+		if !pullRequest.messageQueue.lock {
+			logger.Info(c.mqClient.id(), "Release lock for ", pullRequest.messageQueue, "offset with ", c.offsetStore.readOffset(pullRequest.messageQueue, readFromMemory))
+			c.offsetStore.persist(pullRequest.messageQueue, true)
+			c.mqClient.unlockMq(c.consumerGroup, pullRequest.messageQueue)
+			return
+		}
+		pullRequest.nextOffset = nextBeginOffset
+		c.pullMessageService.pullRequestQueue <- pullRequest
+	}
 }
 
 func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
+	if !pullRequest.messageQueue.lock {
+		return
+	}
+	if !c.running {
+		return
+	}
 
 	commitOffsetEnable := false
 	commitOffsetValue := int64(0)
 
-	commitOffsetValue = c.offsetStore.readOffset(pullRequest.messageQueue, ReadFromMemory)
+	commitOffsetValue = c.offsetStore.readOffset(pullRequest.messageQueue, readFromMemory)
 	if commitOffsetValue > 0 {
 		commitOffsetEnable = true
 	}
@@ -187,96 +249,8 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 		requestHeader.Subscription = subString
 	}
 
-	pullCallback := func(responseFuture *ResponseFuture) {
-		var nextBeginOffset = pullRequest.nextOffset
+	c.mqClient.pullMessage(requestHeader, pullRequest, c.makeCallback(pullRequest), c.conf.TimeoutMillis)
 
-		if responseFuture != nil {
-			responseCommand := responseFuture.responseCommand
-			if responseCommand.Code == Success && len(responseCommand.Body) > 0 {
-				var err error
-				pullResult, ok := responseCommand.ExtFields.(map[string]interface{})
-				if ok {
-					if nextBeginOffsetInter, ok := pullResult["nextBeginOffset"]; ok {
-						if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
-							nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
-							if err != nil {
-								logger.Error(err)
-								return
-							}
-						}
-					}
-				}
-
-				msgs := decodeMessage(responseFuture.responseCommand.Body)
-				err = c.messageListener(msgs)
-				if err != nil {
-					logger.Error(err)
-					//TODO retry
-				} else {
-					c.offsetStore.updateOffset(pullRequest.messageQueue, nextBeginOffset, false)
-				}
-			} else if responseCommand.Code == PullNotFound {
-			} else if responseCommand.Code == PullRetryImmediately || responseCommand.Code == PullOffsetMoved {
-				logger.Infof("pull message error,code=%d,request=%v", responseCommand.Code, requestHeader)
-				var err error
-				pullResult, ok := responseCommand.ExtFields.(map[string]interface{})
-				if ok {
-					if nextBeginOffsetInter, ok := pullResult["nextBeginOffset"]; ok {
-						if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
-							nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
-							if err != nil {
-								logger.Error(err)
-							}
-						}
-					}
-				}
-				//time.Sleep(1 * time.Second)
-			} else {
-				logger.Info(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
-				logger.Info(pullRequest.messageQueue)
-				time.Sleep(1 * time.Second)
-			}
-		} else {
-			logger.Info("responseFuture is nil")
-		}
-
-		nextPullRequest := &PullRequest{
-			consumerGroup: pullRequest.consumerGroup,
-			nextOffset:    nextBeginOffset,
-			messageQueue:  pullRequest.messageQueue,
-		}
-
-		c.mqClient.pullMessageService.pullRequestQueue <- nextPullRequest
-	}
-
-	brokerAddr, _, found := c.mqClient.findBrokerAddressInSubscribe(pullRequest.messageQueue.brokerName, 0, false)
-
-	if found {
-		currOpaque := atomic.AddInt32(&opaque, 1)
-		remotingCommand := new(RemotingCommand)
-		remotingCommand.Code = PullMsg
-		remotingCommand.Opaque = currOpaque
-		remotingCommand.Flag = 0
-		remotingCommand.Language = Language
-		remotingCommand.Version = 79
-
-		remotingCommand.ExtFields = requestHeader
-
-		c.remotingClient.invokeAsync(brokerAddr, remotingCommand, 1000, pullCallback)
-	}
-}
-
-func (c *DefaultConsumer) updateTopicSubscribeInfo(topic string, info []*MessageQueue) {
-	if c.rebalance.subscriptionInner != nil {
-		c.rebalance.subscriptionInnerLock.RLock()
-		_, ok := c.rebalance.subscriptionInner[topic]
-		c.rebalance.subscriptionInnerLock.RUnlock()
-		if ok {
-			c.rebalance.subscriptionInnerLock.Lock()
-			c.rebalance.topicSubscribeInfoTable[topic] = info
-			c.rebalance.subscriptionInnerLock.Unlock()
-		}
-	}
 }
 
 func (c *DefaultConsumer) subscriptions() []*SubscriptionData {
@@ -289,14 +263,4 @@ func (c *DefaultConsumer) subscriptions() []*SubscriptionData {
 
 func (c *DefaultConsumer) doRebalance() {
 	c.rebalance.doRebalance()
-}
-
-func (c *DefaultConsumer) isSubscribeTopicNeedUpdate(topic string) bool {
-	subTable := c.rebalance.subscriptionInner
-	if _, ok := subTable[topic]; ok {
-		if _, ok := c.rebalance.topicSubscribeInfoTable[topic]; !ok {
-			return true
-		}
-	}
-	return false
 }

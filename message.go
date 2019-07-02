@@ -2,27 +2,18 @@ package rocketmq
 
 import (
 	"bytes"
-	"compress/zlib"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
-	"io/ioutil"
 	"strconv"
 )
 
 const (
-	CompressedFlag          = (0x1 << 0)
-	MultiTagsFlag           = (0x1 << 1)
-	TransactionNotType      = (0x0 << 2)
-	TransactionPreparedType = (0x1 << 2)
-	TransactionCommitType   = (0x2 << 2)
-	TransactionRollbackType = (0x3 << 2)
-	UniqKey                 = "UNIQ_KEY"
+	UniqKey = "UNIQ_KEY"
 )
 
 const (
-	NameValueSeparator = 1 + iota
-	PropertySeparator
+	nameValueSeparator = byte(1)
+	propertySeparator  = byte(2)
 )
 
 const (
@@ -46,14 +37,12 @@ func NewMessage(topic string, body []byte) *Message {
 
 type MessageExt struct {
 	Message
-	QueueId       int32
-	StoreSize     int32
-	QueueOffset   int64
-	SysFlag       int32
-	BornTimestamp int64
-	// bornHost
-	StoreTimestamp int64
-	// storeHost
+	QueueId                   int32
+	StoreSize                 int32
+	QueueOffset               int64
+	SysFlag                   int32
+	BornTimestamp             int64
+	StoreTimestamp            int64
 	MsgId                     string
 	CommitLogOffset           int64
 	BodyCRC                   int32
@@ -69,7 +58,7 @@ func decodeMessage(data []byte) []*MessageExt {
 	var topic, body, properties, bornHost, storeHost []byte
 	var propertiesLength int16
 
-	var propertiesMap map[string]string
+	// var propertiesMap map[string]string
 
 	msgs := make([]*MessageExt, 0, 32)
 	for buf.Len() > 0 {
@@ -96,32 +85,18 @@ func decodeMessage(data []byte) []*MessageExt {
 		if bodyLength > 0 {
 			body = make([]byte, bodyLength)
 			binary.Read(buf, binary.BigEndian, body)
-
-			if (sysFlag & CompressedFlag) == CompressedFlag {
-				b := bytes.NewReader(body)
-				z, err := zlib.NewReader(b)
-				if err != nil {
-					logger.Error(err)
-					return nil
-				}
-				defer z.Close()
-				body, err = ioutil.ReadAll(z)
-				if err != nil {
-					logger.Error(err)
-					return nil
-				}
-			}
-
 		}
 		binary.Read(buf, binary.BigEndian, &topicLen)
 		topic = make([]byte, int(topicLen))
-		binary.Read(buf, binary.BigEndian, &topic)
+		binary.Read(buf, binary.BigEndian, topic)
 		binary.Read(buf, binary.BigEndian, &propertiesLength)
+
+		var propertiesMap map[string]string
+
 		if propertiesLength > 0 {
 			properties = make([]byte, propertiesLength)
-			binary.Read(buf, binary.BigEndian, &properties)
-			propertiesMap = make(map[string]string)
-			json.Unmarshal(properties, &propertiesMap)
+			binary.Read(buf, binary.BigEndian, properties)
+			propertiesMap = string2messageProperties(properties)
 		}
 
 		if magicCode != -626843481 {
@@ -150,26 +125,49 @@ func decodeMessage(data []byte) []*MessageExt {
 	return msgs
 }
 
-func messageProperties2String(properties map[string]string) string {
-	StringBuilder := bytes.NewBuffer([]byte{})
-	if properties != nil && len(properties) != 0 {
-		for k, v := range properties {
-			binary.Write(StringBuilder, binary.BigEndian, k)                  // 4
-			binary.Write(StringBuilder, binary.BigEndian, NameValueSeparator) // 4
-			binary.Write(StringBuilder, binary.BigEndian, v)                  // 4
-			binary.Write(StringBuilder, binary.BigEndian, PropertySeparator)  // 4
+// FIXME 返回始终为空 binary.Write不能用在[]byte类型上
+func string2messageProperties(d []byte) map[string]string {
+	if d == nil || len(d) <= 0 {
+		return nil
+	}
+
+	rst := make(map[string]string)
+
+	lines := bytes.Split(d, []byte{propertySeparator})
+	for _, line := range lines {
+		kv := bytes.Split(line, []byte{nameValueSeparator})
+		if len(kv) == 2 {
+			rst[string(kv[0])] = string(kv[1])
 		}
 	}
+
+	return rst
+}
+
+func messageProperties2String(properties map[string]string) string {
+	if properties == nil || len(properties) <= 0 {
+		return ""
+	}
+
+	StringBuilder := new(bytes.Buffer)
+
+	for k, v := range properties {
+		StringBuilder.WriteString(k)
+		StringBuilder.WriteByte(nameValueSeparator)
+		StringBuilder.WriteString(v)
+		StringBuilder.WriteByte(propertySeparator)
+	}
+
 	return StringBuilder.String()
 }
 
 func (msg Message) checkMessage(producer *DefaultProducer) (err error) {
-	if err = checkTopic(msg.Topic); err != nil {
-		if len(msg.Body) == 0 {
-			err = errors.New("ResponseCode:" + strconv.Itoa(MsgIllegal) + ", the message body is null")
-		} else if len(msg.Body) > producer.maxMessageSize {
-			err = errors.New("ResponseCode:" + strconv.Itoa(MsgIllegal) + ", the message body size over max value, MAX:" + strconv.Itoa(producer.maxMessageSize))
-		}
+	err = checkTopic(msg.Topic)
+	if len(msg.Body) == 0 {
+		err = errors.New("ResponseCode:" + strconv.Itoa(MsgIllegal) + ", the message body is null")
+	}
+	if len(msg.Body) > producer.conf.MaxMessageSize {
+		err = errors.New("ResponseCode:" + strconv.Itoa(MsgIllegal) + ", the message body size over max value, MAX:" + strconv.Itoa(producer.conf.MaxMessageSize))
 	}
 	return
 }
@@ -181,7 +179,7 @@ func checkTopic(topic string) (err error) {
 	if len(topic) > CharacterMaxLength {
 		err = errors.New("the specified topic is longer than topic max length 255")
 	}
-	if topic == DefaultTopic {
+	if topic == defaultTopic {
 		err = errors.New("the topic[" + topic + "] is conflict with default topic")
 	}
 	return
@@ -193,4 +191,53 @@ func (m *Message) SetProperty(key, value string) {
 
 func (m *Message) GetProperty(key string) string {
 	return m.Properties[key]
+}
+
+type SendMessageRequestHeader struct {
+	ProducerGroup         string `json:"producerGroup"`
+	Topic                 string `json:"topic"`
+	DefaultTopic          string `json:"defaultTopic"`
+	DefaultTopicQueueNums int    `json:"defaultTopicQueueNums"`
+	QueueId               int32  `json:"queueId"`
+	SysFlag               int    `json:"sysFlag"`
+	BornTimestamp         int64  `json:"bornTimestamp"`
+	Flag                  int32  `json:"flag"`
+	Properties            string `json:"properties"`
+	ReconsumeTimes        int    `json:"reconsumeTimes"`
+	UnitMode              bool   `json:"unitMode"`
+	MaxReconsumeTimes     int    `json:"maxReconsumeTimes"`
+}
+
+const (
+	SendStatusOK = iota
+	SendStatusFlushDiskTimeout
+	SendStatusFlushSlaveTimeout
+	SendStatusSlaveNotAvailable
+)
+
+type SendResult struct {
+	SendStatus    int
+	MsgId         string
+	MessageQueue  *messageQueue
+	QueueOffset   int64
+	TransactionId string
+	OffsetMsgId   string
+	RegionId      string
+}
+
+func NewSendResult(sendStatus int, msgId string, offsetMsgId string, messageQueue *messageQueue, queueOffset int64) *SendResult {
+	return &SendResult{
+		SendStatus:   sendStatus,
+		MsgId:        msgId,
+		OffsetMsgId:  offsetMsgId,
+		MessageQueue: messageQueue,
+		QueueOffset:  queueOffset,
+	}
+}
+
+type SendMessageResponseHeader struct {
+	msgId         string
+	queueId       int32
+	queueOffset   int64
+	transactionId string
 }

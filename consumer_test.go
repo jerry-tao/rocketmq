@@ -3,24 +3,25 @@ package rocketmq
 import (
 	"github.com/pborman/uuid"
 	"testing"
+	"time"
 )
 
 func TestNewDefaultConsumer(t *testing.T) {
-	SetLevel(InfoLevel)
 	conf := &Config{
 		Namesrv:        "172.17.5.201:9876;172.17.5.203:9876",
 		InstanceName:   uuid.New(),
 		PullMaxMsgNums: 32,
-		Group:          "queue-msgrec-1",
+		Group:          uuid.New(),
 	}
 	consumer, _ := NewDefaultConsumer(conf)
-	consumer.Subscribe("rkey-msgrec", "*")
+	consumer.Subscribe("test_topic", "*")
 	consumer.RegisterMessageListener(
 		func(msgs []*MessageExt) error {
 			t.Log(msgs)
 			return nil
 		})
 	consumer.Start()
+	time.Sleep(time.Second*5)
 	consumer.Shutdown()
 }
 

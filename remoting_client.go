@@ -95,7 +95,7 @@ func (d *DefaultRemotingClient) scanResponseTable() {
 	var toRemove []*ResponseFuture
 	now := time.Now().Unix()
 	d.responseTable.Range(func(key, value interface{}) bool {
-		if value.(*ResponseFuture).beginTimestamp+300 <= now && value.(*ResponseFuture).opaque > 1000 {
+		if value.(*ResponseFuture).beginTimestamp+value.(*ResponseFuture).timeoutMillis/1000 <= now && value.(*ResponseFuture).opaque > 1000 {
 			toRemove = append(toRemove, value.(*ResponseFuture))
 			d.responseTable.Delete(key)
 		}
@@ -126,7 +126,6 @@ func (d *DefaultRemotingClient) newNameSrvConn(addr string) (conn net.Conn, err 
 			continue
 		}
 		d.connTable[address] = conn
-		d.wg.Add(1)
 		go d.handleConn(conn, address)
 		return conn, nil
 	}
@@ -161,7 +160,6 @@ func (d *DefaultRemotingClient) connect(addr string) (conn net.Conn, err error) 
 			d.connTable[addr] = newConn
 			go d.handleConn(newConn, addr)
 			conn = newConn
-			d.wg.Add(1)
 		}
 	}
 	return conn, nil
@@ -277,7 +275,6 @@ func (d *DefaultRemotingClient) handleResponse(header, body []byte) {
 }
 
 func (d *DefaultRemotingClient) handleConn(conn net.Conn, addr string) {
-	defer d.wg.Done()
 	b := make([]byte, 1024)
 	var length, headerLength, bodyLength int32
 	var buf = bytes.NewBuffer([]byte{})

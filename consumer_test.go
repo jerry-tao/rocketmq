@@ -1,7 +1,6 @@
 package rocketmq
 
 import (
-	"github.com/pborman/uuid"
 	"testing"
 	"time"
 )
@@ -9,9 +8,8 @@ import (
 func TestNewDefaultConsumer(t *testing.T) {
 	conf := &Config{
 		Namesrv:        "172.17.5.201:9876;172.17.5.203:9876",
-		InstanceName:   uuid.New(),
 		PullMaxMsgNums: 32,
-		Group:          uuid.New(),
+		Group:          "test_group",
 	}
 	consumer, _ := NewDefaultConsumer(conf)
 	consumer.Subscribe("test_topic", "*")

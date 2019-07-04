@@ -25,7 +25,6 @@ func getLocalIP4() net.IP {
 	addresses, err := net.InterfaceAddrs()
 
 	if err != nil {
-		logger.Error("Unable to get local ip address:", err)
 		return []byte{0, 0, 0, 0}
 	}
 
@@ -44,4 +43,9 @@ func genUniqKey() string {
 	binary.Write(base, binary.BigEndian, time.Now().UnixNano())
 	binary.Write(base, binary.BigEndian, rand.Int63())
 	return hex.EncodeToString(base.Bytes())
+}
+
+func varintInt(b []byte) int {
+	_ = b[3] // bounds check hint to compiler; see golang.org/issue/14808
+	return int(uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24)
 }

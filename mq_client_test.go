@@ -1,7 +1,6 @@
 package rocketmq
 
 import (
-	"github.com/pborman/uuid"
 	"math/rand"
 	"os"
 	"strconv"
@@ -11,7 +10,6 @@ import (
 func TestNewMqClient(t *testing.T) {
 	c := newMqClient(&Config{
 		Namesrv:        "172.17.5.201:9876;172.17.5.203:9876",
-		InstanceName:   uuid.New(),
 		PullMaxMsgNums: 32,
 		Group:          "2bconsumer690",
 	})
@@ -267,7 +265,6 @@ func TestDefaultMqClient_findConsumerIdList(t *testing.T) {
 	//SetLevel(DebugLevel)
 	conf := &Config{
 		Namesrv:        "172.17.5.201:9876;172.17.5.203:9876",
-		InstanceName:   uuid.New(),
 		PullMaxMsgNums: 32,
 		Group:          "2bconsumer690",
 	}

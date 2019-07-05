@@ -1,8 +1,6 @@
 package rocketmq
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net"
@@ -235,12 +233,13 @@ func (d *DefaultRemotingClient) InvokeOneway(addr string, request *RemotingComma
 	return d.sendRequest(request, conn, addr)
 }
 
-func (d *DefaultRemotingClient) handleResponse(header, body []byte) {
+func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 	defer d.wg.Done()
 
-	cmd := decodeRemoteCommand(header, body)
+	//cmd := decodeRemoteCommand(header, body)
 	logger.Debug("Received response:", cmd)
 	resp, ok := d.responseTable.Load(cmd.Opaque)
+	logger.Debug()
 	d.responseTable.Delete(cmd.Opaque)
 	if ok {
 		response := resp.(*ResponseFuture)
@@ -275,104 +274,18 @@ func (d *DefaultRemotingClient) handleResponse(header, body []byte) {
 }
 
 func (d *DefaultRemotingClient) handleConn(conn net.Conn, addr string) {
-	b := make([]byte, 1024)
-	var length, headerLength, bodyLength int32
-	var buf = bytes.NewBuffer([]byte{})
-	var header, body []byte
-	//decoder := json.NewDecoder(conn)
-	var flag = 0
+
+	decoder := newDecoder(conn)
 	for {
-		//conn.SetReadDeadline(time.Now().Add(time.Second * 10))
-		// after stop send heartbeat will
-		//decoder := json.NewDecoder(conn)
-		//err := decoder.Decode(v)
-		//if err != nil {
-		//
-		//}
-		//cmd := new(RemotingCommand)
-		//err := decoder.Decode(cmd)
-		n, err := conn.Read(b)
+		cmd := new(RemotingCommand)
+		err := decoder.Decode(cmd)
 		if err != nil {
 			d.releaseConn(addr, conn)
+			logger.Error("decode cmd fail:", err)
 			return
 		}
-
-		_, err = buf.Write(b[:n])
-		if err != nil {
-			d.releaseConn(addr, conn)
-			return
-		}
-
-		for {
-			if flag == 0 {
-				if buf.Len() >= 4 {
-					err = binary.Read(buf, binary.BigEndian, &length)
-					if err != nil {
-						logger.Error(err)
-						return
-					}
-					flag = 1
-				} else {
-					break
-				}
-			}
-
-			if flag == 1 {
-				if buf.Len() >= 4 {
-					err = binary.Read(buf, binary.BigEndian, &headerLength)
-					if err != nil {
-						logger.Error(err)
-						return
-					}
-					flag = 2
-				} else {
-					break
-				}
-
-			}
-
-			if flag == 2 {
-				if (buf.Len() > 0) && (buf.Len() >= int(headerLength)) {
-					header = make([]byte, headerLength)
-					_, err = buf.Read(header)
-					if err != nil {
-						logger.Error(err)
-						return
-					}
-					flag = 3
-				} else {
-					break
-				}
-			}
-
-			if flag == 3 {
-				bodyLength = length - 4 - headerLength
-				if bodyLength == 0 {
-					flag = 0
-				} else {
-					if buf.Len() >= int(bodyLength) {
-						body = make([]byte, int(bodyLength))
-						_, err = buf.Read(body)
-						if err != nil {
-							logger.Error(err)
-							return
-						}
-						flag = 0
-					} else {
-						break
-					}
-				}
-			}
-
-			if flag == 0 {
-				headerCopy := make([]byte, len(header))
-				bodyCopy := make([]byte, len(body))
-				copy(headerCopy, header)
-				copy(bodyCopy, body)
-				d.wg.Add(1)
-				go d.handleResponse(headerCopy, bodyCopy)
-			}
-		}
+		d.wg.Add(1)
+		go d.handleResponse(cmd)
 
 	}
 }

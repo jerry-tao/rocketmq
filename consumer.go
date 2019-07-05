@@ -156,7 +156,7 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 				}
 			}
 
-			msgs := decodeMessage(responseFuture.responseCommand.Body)
+			msgs := responseFuture.responseCommand.decodeMessage()
 			err = c.messageListener(msgs)
 			if err != nil {
 				logger.Error(err)
@@ -186,7 +186,10 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			}
 		} else {
 			logger.Error(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
+			if pullRequest.suspend < maxSuspend {
+				pullRequest.suspend = pullRequest.suspend * 2
+			}
 		}
 
 		if !pullRequest.messageQueue.lock {

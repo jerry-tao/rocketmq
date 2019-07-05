@@ -276,18 +276,6 @@ func buildCommand(code int, ext interface{}, body []byte) *RemotingCommand {
 	}
 }
 
-func decodeRemoteCommand(header, body []byte) *RemotingCommand {
-	cmd := &RemotingCommand{}
-	cmd.ExtFields = make(map[string]string)
-	err := json.Unmarshal(header, cmd)
-	if err != nil {
-		logger.Error(err)
-		return nil
-	}
-	cmd.Body = body
-	return cmd
-}
-
 func (r *RemotingCommand) String() string {
 	j, _ := json.Marshal(r)
 	return string(j)
@@ -330,6 +318,18 @@ func (r *RemotingCommand) decodeCommandCustomHeader() (responseHeader SendMessag
 func (r *RemotingCommand) markOneWayRPC() {
 	bits := 1 << rpcOneway
 	r.Flag |= bits
+}
+
+func (r *RemotingCommand) equal(o *RemotingCommand) bool {
+	if len(r.Body) != len(o.Body) {
+		return false
+	}
+	for i, b := range r.Body {
+		if b != o.Body[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ext fields
@@ -387,4 +387,81 @@ func genOpaque() int32 {
 		currOpaque = atomic.AddInt32(&opaque, 1001)
 	}
 	return currOpaque
+}
+
+func (r *RemotingCommand) decodeMessage() []*MessageExt {
+	data := r.Body
+	buf := bytes.NewBuffer(data)
+	var storeSize, magicCode, bodyCRC, queueId, flag, sysFlag, reconsumeTimes, bodyLength, bornPort, storePort int32
+	var queueOffset, physicOffset, preparedTransactionOffset, bornTimeStamp, storeTimestamp int64
+	var topicLen byte
+	var topic, body, properties, bornHost, storeHost []byte
+	var propertiesLength int16
+
+	// var propertiesMap map[string]string
+
+	msgs := make([]*MessageExt, 0, 32)
+	for buf.Len() > 0 {
+		msg := new(MessageExt)
+		binary.Read(buf, binary.BigEndian, &storeSize)
+		binary.Read(buf, binary.BigEndian, &magicCode)
+		binary.Read(buf, binary.BigEndian, &bodyCRC)
+		binary.Read(buf, binary.BigEndian, &queueId)
+		binary.Read(buf, binary.BigEndian, &flag)
+		binary.Read(buf, binary.BigEndian, &queueOffset)
+		binary.Read(buf, binary.BigEndian, &physicOffset)
+		binary.Read(buf, binary.BigEndian, &sysFlag)
+		binary.Read(buf, binary.BigEndian, &bornTimeStamp)
+		bornHost = make([]byte, 4)
+		binary.Read(buf, binary.BigEndian, &bornHost)
+		binary.Read(buf, binary.BigEndian, &bornPort)
+		binary.Read(buf, binary.BigEndian, &storeTimestamp)
+		storeHost = make([]byte, 4)
+		binary.Read(buf, binary.BigEndian, &storeHost)
+		binary.Read(buf, binary.BigEndian, &storePort)
+		binary.Read(buf, binary.BigEndian, &reconsumeTimes)
+		binary.Read(buf, binary.BigEndian, &preparedTransactionOffset)
+		binary.Read(buf, binary.BigEndian, &bodyLength)
+		if bodyLength > 0 {
+			body = make([]byte, bodyLength)
+			binary.Read(buf, binary.BigEndian, body)
+		}
+		binary.Read(buf, binary.BigEndian, &topicLen)
+		topic = make([]byte, int(topicLen))
+		binary.Read(buf, binary.BigEndian, topic)
+		binary.Read(buf, binary.BigEndian, &propertiesLength)
+
+		var propertiesMap map[string]string
+
+		if propertiesLength > 0 {
+			properties = make([]byte, propertiesLength)
+			binary.Read(buf, binary.BigEndian, properties)
+			propertiesMap = string2messageProperties(properties)
+		}
+
+		if magicCode != -626843481 {
+			logger.Debug(r)
+			logger.Errorf("magic code is error %d", magicCode)
+			return nil
+		}
+
+		msg.Topic = string(topic)
+		msg.QueueId = queueId
+		msg.SysFlag = sysFlag
+		msg.QueueOffset = queueOffset
+		msg.BodyCRC = bodyCRC
+		msg.StoreSize = storeSize
+		msg.BornTimestamp = bornTimeStamp
+		msg.ReconsumeTimes = reconsumeTimes
+		msg.Flag = flag
+		//msg.commitLogOffset=physicOffset
+		msg.StoreTimestamp = storeTimestamp
+		msg.PreparedTransactionOffset = preparedTransactionOffset
+		msg.Body = body
+		msg.Properties = propertiesMap
+
+		msgs = append(msgs, msg)
+	}
+
+	return msgs
 }

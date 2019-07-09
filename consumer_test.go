@@ -1,11 +1,11 @@
 package rocketmq
 
 import (
+	"errors"
 	"testing"
 )
 
 func TestNewDefaultConsumer(t *testing.T) {
-	SetLevel(DebugLevel)
 	ch := make(chan struct{})
 	conf := &Config{
 		Namesrv:        testNamesrvAddress,
@@ -19,11 +19,13 @@ func TestNewDefaultConsumer(t *testing.T) {
 			if len(msgs) == 0 {
 				t.Fatalf("consumer empty msgs")
 			} else {
-				consumer.ResetOffset(testConsumerTopic)
-				close(ch)
-				go consumer.Shutdown()
+				go func() {
+					consumer.Shutdown()
+					ch <- struct{}{}
+				}()
 			}
-			return nil
+			// return error won't update offset
+			return errors.New("empty")
 		})
 	_ = consumer.Start()
 	<-ch

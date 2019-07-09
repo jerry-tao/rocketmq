@@ -22,7 +22,6 @@ type Consumer interface {
 	RegisterMessageListener(listener MessageListener)
 	Subscribe(topic string, subExpression string)
 	//UnSubscribe(topic string)
-	ResetOffset(topic string)
 }
 
 type DefaultConsumer struct {
@@ -103,6 +102,7 @@ func (c *DefaultConsumer) Shutdown() bool {
 		c.wg.Wait()                // 等待所有goroutine退出
 		c.offsetStore.persistAll() // 最后更新offset
 		//TODO unlock mq
+		c.rebalance.shutdown()
 		c.mqClient.shutdown()
 		return true
 	}
@@ -268,8 +268,4 @@ func (c *DefaultConsumer) subscriptions() []*SubscriptionData {
 
 func (c *DefaultConsumer) doRebalance() {
 	c.rebalance.doRebalance()
-}
-
-func (c *DefaultConsumer) ResetOffset(topic string) {
-	c.mqClient.resetOffset(topic)
 }

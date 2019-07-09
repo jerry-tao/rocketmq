@@ -18,17 +18,15 @@ type OffsetStore interface {
 }
 
 type RemoteOffsetStore struct {
-	groupName       string
-	mqClient        mqClient
-	offsetTable     map[*messageQueue]int64
-	offsetTableLock sync.RWMutex
+	groupName   string
+	mqClient    mqClient
+	offsetTable sync.Map
 }
 
 func newOffsetStore(client mqClient, groupName string) OffsetStore {
 	return &RemoteOffsetStore{
-		mqClient:    client,
-		groupName:   groupName,
-		offsetTable: map[*messageQueue]int64{},
+		mqClient:  client,
+		groupName: groupName,
 	}
 }
 
@@ -36,11 +34,9 @@ func (r *RemoteOffsetStore) readOffset(mq *messageQueue, readType int) int64 {
 	switch readType {
 	// used for commitOffset
 	case readFromMemory:
-		r.offsetTableLock.RLock()
-		offset, ok := r.offsetTable[mq]
-		r.offsetTableLock.RUnlock()
+		offset, ok := r.offsetTable.Load(mq)
 		if ok {
-			return offset
+			return offset.(int64)
 		}
 	// used for consumeOffset
 	case readFromStore:
@@ -58,25 +54,24 @@ func (r *RemoteOffsetStore) readOffset(mq *messageQueue, readType int) int64 {
 }
 
 func (r *RemoteOffsetStore) persist(mq *messageQueue, remove bool) {
-	r.offsetTableLock.RLock()
-	defer r.offsetTableLock.RUnlock()
-	offset, ok := r.offsetTable[mq]
+	offset, ok := r.offsetTable.Load(mq)
 	if ok {
-		err := r.mqClient.updateOffset(r.groupName, mq, offset)
+		err := r.mqClient.updateOffset(r.groupName, mq, offset.(int64))
 		if err != nil {
 			logger.Error(err)
 		}
 
 		if remove {
-			delete(r.offsetTable, mq)
+			r.offsetTable.Delete(mq)
 		}
 	}
 }
 
 func (r *RemoteOffsetStore) persistAll() {
-	for k := range r.offsetTable {
-		r.persist(k, true)
-	}
+	r.offsetTable.Range(func(key, value interface{}) bool {
+		r.persist(key.(*messageQueue), true)
+		return true
+	})
 }
 
 type UpdateConsumerOffsetRequestHeader struct {
@@ -88,23 +83,16 @@ type UpdateConsumerOffsetRequestHeader struct {
 
 func (r *RemoteOffsetStore) updateOffset(mq *messageQueue, offset int64, increaseOnly bool) {
 	if mq != nil {
-		r.offsetTableLock.RLock()
-		offsetOld, ok := r.offsetTable[mq]
-		r.offsetTableLock.RUnlock()
+		offsetOld, ok := r.offsetTable.Load(mq)
 		if !ok {
-			r.offsetTableLock.Lock()
-			r.offsetTable[mq] = offset
-			r.offsetTableLock.Unlock()
+			r.offsetTable.Store(mq, offset)
 		} else {
+			offsetValue := offsetOld.(int64)
 			if increaseOnly {
-				atomic.AddInt64(&offsetOld, offset)
-				r.offsetTableLock.Lock()
-				r.offsetTable[mq] = offsetOld
-				r.offsetTableLock.Unlock()
+				atomic.AddInt64(&offsetValue, offset)
+				r.offsetTable.Store(mq, offsetValue)
 			} else {
-				r.offsetTableLock.Lock()
-				r.offsetTable[mq] = offset
-				r.offsetTableLock.Unlock()
+				r.offsetTable.Store(mq, offset)
 			}
 		}
 

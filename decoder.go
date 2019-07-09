@@ -12,6 +12,7 @@ const (
 	cmdEnd
 )
 
+// not for concurrent usage.
 type cmdDecoder struct {
 	r     io.Reader
 	buf   []byte

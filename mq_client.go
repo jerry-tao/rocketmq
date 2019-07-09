@@ -25,6 +25,7 @@ type mqClient interface {
 	getOffset(group string, mq *messageQueue) (int64, error)
 	registerConsumer(consumer *DefaultConsumer)
 	updateOffset(group string, mq *messageQueue, offset int64) error
+	resetOffset(topic string)
 }
 
 type defaultMqClient struct {
@@ -653,4 +654,11 @@ func (m *defaultMqClient) updateOffset(groupName string, mq *messageQueue, offse
 		return nil
 	}
 	return errors.New("not found broker")
+}
+
+func (m *defaultMqClient) resetOffset(topic string) {
+	to, _ := m.getTopic(topic, false)
+	for _, mq := range to.mqs {
+		m.updateOffset(m.conf.Group, mq, 0)
+	}
 }

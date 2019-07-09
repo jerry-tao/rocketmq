@@ -53,6 +53,7 @@ func (d *DefaultRemotingClient) RegisterResponse(opaque int32, callback InvokeCa
 		opaque:         opaque,
 		beginTimestamp: time.Now().Unix(),
 		invokeCallback: callback,
+		timeoutMillis:  -1,
 	}
 	d.responseTable.Store(opaque, response)
 }
@@ -71,7 +72,7 @@ func (d *DefaultRemotingClient) Start() {
 				if !d.running {
 					flag = false
 				}
-				//d.scanResponseTable()
+				d.scanResponseTable()
 			case <-d.ch:
 				flag = false
 			}
@@ -86,20 +87,21 @@ func (d *DefaultRemotingClient) Shutdown() {
 	close(d.ch)
 	d.wg.Wait()            // wait all callback finish
 	d.releaseAll()         // release connection
-	d.cleanResponseTable() // deal with left response.
+	d.cleanResponseTable() // deal with left request.
 }
 func (d *DefaultRemotingClient) scanResponseTable() {
 
 	var toRemove []*ResponseFuture
 	now := time.Now().Unix()
 	d.responseTable.Range(func(key, value interface{}) bool {
-		if value.(*ResponseFuture).beginTimestamp+value.(*ResponseFuture).timeoutMillis/1000 <= now && value.(*ResponseFuture).opaque > 1000 {
+		rf := value.(*ResponseFuture)
+		// 超时两倍之后移除
+		if rf.timeoutMillis > 0 && rf.beginTimestamp+rf.timeoutMillis/1000*2 <= now {
 			toRemove = append(toRemove, value.(*ResponseFuture))
 			d.responseTable.Delete(key)
 		}
 		return true
 	})
-
 	for _, response := range toRemove {
 		if response.invokeCallback != nil {
 			response.err = ErrTimeout
@@ -235,11 +237,8 @@ func (d *DefaultRemotingClient) InvokeOneway(addr string, request *RemotingComma
 
 func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 	defer d.wg.Done()
-
-	//cmd := decodeRemoteCommand(header, body)
 	logger.Debug("Received response:", cmd)
 	resp, ok := d.responseTable.Load(cmd.Opaque)
-	logger.Debug()
 	d.responseTable.Delete(cmd.Opaque)
 	if ok {
 		response := resp.(*ResponseFuture)
@@ -302,6 +301,7 @@ func (d *DefaultRemotingClient) sendRequest(request *RemotingCommand, conn net.C
 	}
 	return nil
 }
+
 func (d *DefaultRemotingClient) releaseAll() {
 	d.connTableLock.Lock()
 	defer d.connTableLock.Unlock()
@@ -309,17 +309,10 @@ func (d *DefaultRemotingClient) releaseAll() {
 		conn.Close()
 	}
 }
+
 func (d *DefaultRemotingClient) cleanResponseTable() {
-	//// there should be no other goroutine access, but still check for sure.
-	//d.responseTableLock.Lock()
-	//defer d.responseTableLock.Unlock()
-	//for _, r := range d.fifoQueue {
-	//	if r.invokeCallback != nil {
-	//		r.err = errors.New("server has bean shutdown")
-	//		r.invokeCallback(r)
-	//	}
-	//}
 }
+
 func (d *DefaultRemotingClient) releaseConn(addr string, conn net.Conn) {
 	d.connTableLock.Lock()
 	conn.Close()

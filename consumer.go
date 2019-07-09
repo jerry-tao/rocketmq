@@ -22,6 +22,7 @@ type Consumer interface {
 	RegisterMessageListener(listener MessageListener)
 	Subscribe(topic string, subExpression string)
 	//UnSubscribe(topic string)
+	ResetOffset(topic string)
 }
 
 type DefaultConsumer struct {
@@ -97,11 +98,11 @@ func (c *DefaultConsumer) Shutdown() bool {
 	c.m.Lock()
 	defer c.m.Unlock()
 	if c.running {
-		//TODO unlock mq
 		c.running = false
 		close(c.closeCh)
 		c.wg.Wait()                // 等待所有goroutine退出
 		c.offsetStore.persistAll() // 最后更新offset
+		//TODO unlock mq
 		c.mqClient.shutdown()
 		return true
 	}
@@ -131,10 +132,11 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			return
 		}
 
-		//if responseFuture.err != nil {
-		//	logger.Error("pull message error,", pullRequest, responseFuture.err)
-		//	return
-		//}
+		if responseFuture.err != nil {
+			logger.Error("pull message error,", pullRequest, responseFuture.err, "now retry")
+			c.pullMessageService.pullRequestQueue <- pullRequest
+			return
+		}
 
 		var nextBeginOffset = pullRequest.nextOffset
 
@@ -158,7 +160,8 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			msgs := responseFuture.responseCommand.decodeMessage()
 			err = c.messageListener(msgs)
 			if err != nil {
-				logger.Error(err)
+				// TODO consider stop consume?
+				logger.Error("consume error: ", err)
 			} else {
 				c.offsetStore.updateOffset(pullRequest.messageQueue, nextBeginOffset, false)
 			}
@@ -265,4 +268,8 @@ func (c *DefaultConsumer) subscriptions() []*SubscriptionData {
 
 func (c *DefaultConsumer) doRebalance() {
 	c.rebalance.doRebalance()
+}
+
+func (c *DefaultConsumer) ResetOffset(topic string) {
+	c.mqClient.resetOffset(topic)
 }

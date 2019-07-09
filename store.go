@@ -62,6 +62,7 @@ func (r *RemoteOffsetStore) persist(mq *messageQueue, remove bool) {
 		}
 
 		if remove {
+			//r.mqClient.unlockMq(r.groupName, mq)
 			r.offsetTable.Delete(mq)
 		}
 	}

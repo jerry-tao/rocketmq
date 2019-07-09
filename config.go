@@ -55,15 +55,10 @@ func validConfig(config *Config) error {
 		logger.Debug("Retry times invalid, set to default 2")
 	}
 
-	if config.MaxMessageSize < 1024{
+	if config.MaxMessageSize < 1024 {
 		config.MaxMessageSize = defaultMaxMessageSize
 		logger.Debug("MaxMessageSize invalid, set to default 4096")
 	}
 
 	return nil
 }
-
-//type ConsumerConfig struct {
-//}
-//type ProducerConfig struct {
-//}

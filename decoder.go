@@ -46,8 +46,8 @@ func (dec *cmdDecoder) refill() error {
 
 func (dec *cmdDecoder) readValue() error {
 	var err error
-End:
-	for {
+	flag := true
+	for flag {
 		if err != nil {
 			break
 		}
@@ -69,7 +69,7 @@ End:
 		case cmdEnd:
 			headerLength := varintInt(dec.buf[dec.scanp+4 : dec.scanp+8])
 			dec.headerLength = dec.scanp + 8 + headerLength
-			break End
+			flag = false
 		}
 	}
 

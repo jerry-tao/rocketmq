@@ -1,7 +1,6 @@
 package rocketmq
 
 import (
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -132,10 +131,10 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			return
 		}
 
-		if responseFuture.err != nil {
-			logger.Error("pull message error,", pullRequest, responseFuture.err)
-			return
-		}
+		//if responseFuture.err != nil {
+		//	logger.Error("pull message error,", pullRequest, responseFuture.err)
+		//	return
+		//}
 
 		var nextBeginOffset = pullRequest.nextOffset
 
@@ -165,11 +164,11 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			}
 		} else if responseCommand.Code == PullNotFound {
 			// 当前无消息，sleep 1~16s
-			logger.Infof("No new message sleep %d ms", pullRequest.suspend)
-			time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
-			if pullRequest.suspend < maxSuspend {
-				pullRequest.suspend = pullRequest.suspend * 2
-			}
+			//logger.Infof("No new message sleep %d ms", pullRequest.suspend)
+			//time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
+			//if pullRequest.suspend < maxSuspend {
+			//	pullRequest.suspend = pullRequest.suspend * 2
+			//}
 		} else if responseCommand.Code == PullRetryImmediately || responseCommand.Code == PullOffsetMoved {
 			logger.Infof("pull message error,code=%d,request=%v", responseCommand.Code, pullRequest)
 			var err error
@@ -185,11 +184,11 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 				}
 			}
 		} else {
-			logger.Error(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
-			time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
-			if pullRequest.suspend < maxSuspend {
-				pullRequest.suspend = pullRequest.suspend * 2
-			}
+			//logger.Error(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
+			//time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
+			//if pullRequest.suspend < maxSuspend {
+			//	pullRequest.suspend = pullRequest.suspend * 2
+			//}
 		}
 
 		if !pullRequest.messageQueue.lock {
@@ -252,7 +251,7 @@ func (c *DefaultConsumer) pullMessage(pullRequest *PullRequest) {
 		requestHeader.Subscription = subString
 	}
 
-	c.mqClient.pullMessage(requestHeader, pullRequest, c.makeCallback(pullRequest), c.conf.TimeoutMillis)
+	c.mqClient.pullMessage(requestHeader, pullRequest, c.makeCallback(pullRequest), BrokerSuspendMaxTimeMillis)
 
 }
 

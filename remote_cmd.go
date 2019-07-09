@@ -278,7 +278,7 @@ func buildCommand(code int, ext interface{}, body []byte) *RemotingCommand {
 
 func (r *RemotingCommand) String() string {
 	j, _ := json.Marshal(r)
-	return string(j)
+	return string(j) + string(r.Body)
 }
 
 func (r *RemotingCommand) buildHeader() []byte {

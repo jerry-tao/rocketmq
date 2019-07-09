@@ -71,7 +71,7 @@ func (d *DefaultRemotingClient) Start() {
 				if !d.running {
 					flag = false
 				}
-				d.scanResponseTable()
+				//d.scanResponseTable()
 			case <-d.ch:
 				flag = false
 			}

@@ -627,7 +627,7 @@ func (m *defaultMqClient) pullMessage(header *PullMessageRequestHeader, pullRequ
 
 	if found {
 		remotingCommand := buildCommand(PullMsg, header, nil)
-		return m.pullMessageKernel(brokerAddr, remotingCommand, 1000, invokeCallback)
+		return m.pullMessageKernel(brokerAddr, remotingCommand, timeoutMillis, invokeCallback)
 	}
 	return errors.New("cant find broker")
 }

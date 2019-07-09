@@ -49,7 +49,6 @@ type MessageExt struct {
 	PreparedTransactionOffset int64
 }
 
-
 // FIXME 返回始终为空 binary.Write不能用在[]byte类型上
 func string2messageProperties(d []byte) map[string]string {
 	if d == nil || len(d) <= 0 {
@@ -111,6 +110,9 @@ func checkTopic(topic string) (err error) {
 }
 
 func (m *Message) SetProperty(key, value string) {
+	if m.Properties == nil {
+		m.Properties = make(map[string]string)
+	}
 	m.Properties[key] = value
 }
 

@@ -14,6 +14,12 @@ type SubscriptionData struct {
 	CodeSet         []string
 	SubVersion      int64
 }
+
+type kv struct {
+	mq *messageQueue
+	pr *PullRequest
+}
+
 type Rebalance struct {
 	groupName                    string
 	messageModel                 string
@@ -21,7 +27,7 @@ type Rebalance struct {
 	mqClient                     mqClient
 	allocateMessageQueueStrategy AllocateMessageQueueStrategy
 	consumer                     *DefaultConsumer
-	processQueueTable            map[*messageQueue]*PullRequest
+	processQueueTable            map[string]kv
 	processQueueTableLock        sync.RWMutex
 	mutex                        sync.Mutex
 }
@@ -33,7 +39,7 @@ func NewRebalance(groupName string, client mqClient) *Rebalance {
 		subscriptionInner:            make(map[string]*SubscriptionData),
 		allocateMessageQueueStrategy: new(AllocateMessageQueueAveragely),
 		messageModel:                 "CLUSTERING",
-		processQueueTable:            make(map[*messageQueue]*PullRequest),
+		processQueueTable:            make(map[string]kv),
 	}
 }
 
@@ -53,10 +59,8 @@ func (r *Rebalance) doRebalance() {
 func (r *Rebalance) shutdown() {
 	r.processQueueTableLock.Lock()
 	defer r.processQueueTableLock.Unlock()
-	for k := range r.processQueueTable {
-		k.lock = false
-		r.mqClient.unlockMq(r.groupName, k)
-		delete(r.processQueueTable, k)
+	for _, k := range r.processQueueTable {
+		r.unlockMq(r.groupName,k.mq)
 	}
 }
 
@@ -69,11 +73,11 @@ func (r ConsumerIDSorter) Less(i, j int) bool {
 }
 
 type AllocateMessageQueueStrategy interface {
-	allocate(consumerGroup string, currentCID string, mqAll []*messageQueue, cidAll []string) (map[*messageQueue]bool, error)
+	allocate(consumerGroup string, currentCID string, mqAll []*messageQueue, cidAll []string) (map[string]*messageQueue, error)
 }
 type AllocateMessageQueueAveragely struct{}
 
-func (r *AllocateMessageQueueAveragely) allocate(consumerGroup string, currentCID string, mqAll []*messageQueue, cidAll []string) (map[*messageQueue]bool, error) {
+func (r *AllocateMessageQueueAveragely) allocate(consumerGroup string, currentCID string, mqAll []*messageQueue, cidAll []string) (map[string]*messageQueue, error) {
 	if currentCID == "" {
 		return nil, errors.New("currentCID is empty")
 	}
@@ -86,7 +90,7 @@ func (r *AllocateMessageQueueAveragely) allocate(consumerGroup string, currentCI
 		return nil, errors.New("cidAll is  empty")
 	}
 
-	result := make(map[*messageQueue]bool)
+	result := make(map[string]*messageQueue)
 	for i, cid := range cidAll {
 		if cid == currentCID {
 			mqLen := len(mqAll)
@@ -118,7 +122,7 @@ func (r *AllocateMessageQueueAveragely) allocate(consumerGroup string, currentCI
 			}
 
 			for j := 0; j < min; j++ {
-				result[mqAll[(startIndex+j)%mqLen]] = true
+				result[mqAll[(startIndex+j)%mqLen].String()] = mqAll[(startIndex+j)%mqLen]
 			}
 			return result, nil
 
@@ -159,18 +163,18 @@ func (r *Rebalance) rebalanceByTopic(topic string) error {
 	return nil
 }
 
-func (r *Rebalance) updateProcessQueueTableInRebalance(topic string, mqSet map[*messageQueue]bool) {
+func (r *Rebalance) updateProcessQueueTableInRebalance(topic string, mqSet map[string]*messageQueue) {
 	r.processQueueTableLock.Lock()
 	defer r.processQueueTableLock.Unlock()
-	for k := range mqSet {
-		if _, ok := r.processQueueTable[k]; !ok {
+	for _, k := range mqSet {
+		if _, ok := r.processQueueTable[k.String()]; !ok {
 			if err := r.mqClient.lockMq(r.groupName, k); err == nil {
 				pullRequest := new(PullRequest)
 				pullRequest.consumerGroup = r.groupName
 				pullRequest.messageQueue = k
 				pullRequest.nextOffset = r.computePullFromWhere(k)
 				pullRequest.suspend = defaultSuspend
-				r.processQueueTable[k] = pullRequest
+				r.processQueueTable[k.String()] = kv{k, pullRequest}
 				logger.Info(r.mqClient.id(),
 					"Get lock for ", k, "start with ", pullRequest.nextOffset)
 				k.lock = true
@@ -181,13 +185,21 @@ func (r *Rebalance) updateProcessQueueTableInRebalance(topic string, mqSet map[*
 
 		}
 	}
-	for k := range r.processQueueTable {
+	for k, v := range r.processQueueTable {
 		if _, ok := mqSet[k]; !ok {
-			k.lock = false
-			delete(r.processQueueTable, k)
+			r.unlockMq(r.groupName, v.mq)
 		}
 	}
 
+}
+func (r *Rebalance) unlockMq(groupName string, mq *messageQueue) {
+	for k, v := range r.processQueueTable {
+		if k == mq.String() {
+			v.mq.lock = false
+			delete(r.processQueueTable, k)
+			r.mqClient.unlockMq(groupName, mq)
+		}
+	}
 }
 
 func (r *Rebalance) computePullFromWhere(mq *messageQueue) int64 {

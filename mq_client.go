@@ -17,7 +17,7 @@ type mqClient interface {
 	start()     //
 	shutdown()
 	getTopic(topic string, autoCreate bool) (*topicInfo, error)
-	sendMsg(msg *Message, communicationMode int, sendCallback SendCallback) (sendResult *SendResult, err error)
+	sendMsg(msg internalMessage, communicationMode int, sendCallback SendCallback) (sendResult *SendResult, err error)
 	pullMessage(header *PullMessageRequestHeader, pullRequest *PullRequest, invokeCallback InvokeCallback, timeoutMillis int64) error
 	findConsumerIdList(topic string, groupName string) ([]string, error)
 	unlockMq(group string, mq *messageQueue) error
@@ -67,9 +67,7 @@ func (m *defaultMqClient) start() {
 	if !m.running {
 		// start scan response table
 		m.remotingClient.Start()
-		if m.consumer != nil {
-			m.startScheduledTask()
-		}
+		m.startScheduledTask()
 		m.running = true
 	}
 }
@@ -80,8 +78,8 @@ func (m *defaultMqClient) shutdown() {
 }
 
 // retry 放在client里做是因为涉及了重选broker再次尝试
-func (m *defaultMqClient) sendMsg(msg *Message, communicationMode int, sendCallback SendCallback) (sendResult *SendResult, err error) {
-	topic, err := m.getTopic(msg.Topic, true)
+func (m *defaultMqClient) sendMsg(msg internalMessage, communicationMode int, sendCallback SendCallback) (sendResult *SendResult, err error) {
+	topic, err := m.getTopic(msg.GetTopic(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -113,24 +111,25 @@ func (m *defaultMqClient) sendMsg(msg *Message, communicationMode int, sendCallb
 	return nil, err
 }
 
-func (m *defaultMqClient) sendKernel(msg *Message, mq *messageQueue, communicationMode int, sendCallback SendCallback,
+func (m *defaultMqClient) sendKernel(msg internalMessage, mq *messageQueue, communicationMode int, sendCallback SendCallback,
 	topicPublishInfo *TopicPublishInfo, times int) (sendResult *SendResult, err error) {
 	brokerAddr := m.findBrokerAddressInPublish(mq.brokerName)
 	if brokerAddr == "" {
-		m.getTopic(msg.Topic, true)
+		m.getTopic(msg.GetTopic(), true)
 		brokerAddr = m.findBrokerAddressInPublish(mq.brokerName)
 	}
 	if brokerAddr != "" {
 		requestHeader := new(SendMessageRequestHeader)
 		requestHeader.ProducerGroup = m.conf.Group
-		requestHeader.Topic = msg.Topic
+		requestHeader.Topic = msg.GetTopic()
 		requestHeader.DefaultTopic = defaultTopic
 		requestHeader.DefaultTopicQueueNums = m.conf.DefaultTopicQueueNums
 		requestHeader.QueueId = mq.queueId
 		requestHeader.SysFlag = 0
-		requestHeader.Properties = messageProperties2String(msg.Properties)
+		requestHeader.Properties = msg.PropertiesString()
 		requestHeader.ReconsumeTimes = 0
-		remotingCommand := buildCommand(SendMsg, requestHeader, msg.Body)
+		requestHeader.Batch = msg.Batch()
+		remotingCommand := buildCommand(SendMsg, requestHeader, msg.GetBody())
 		switch communicationMode {
 		case Async:
 			err = m.sendMessageAsync(brokerAddr, mq.brokerName, msg, remotingCommand, sendCallback, topicPublishInfo,
@@ -144,7 +143,7 @@ func (m *defaultMqClient) sendKernel(msg *Message, mq *messageQueue, communicati
 	return
 }
 
-func (m *defaultMqClient) sendMessageSync(addr string, brokerName string, msg *Message, remotingCommand *RemotingCommand) (sendResult *SendResult, err error) {
+func (m *defaultMqClient) sendMessageSync(addr string, brokerName string, msg internalMessage, remotingCommand *RemotingCommand) (sendResult *SendResult, err error) {
 	var response *RemotingCommand
 	if response, err = m.remotingClient.InvokeSync(addr, remotingCommand, m.conf.TimeoutMillis); err != nil {
 		return nil, err
@@ -152,7 +151,7 @@ func (m *defaultMqClient) sendMessageSync(addr string, brokerName string, msg *M
 	return m.processSendResponse(brokerName, msg, response)
 }
 
-func (m *defaultMqClient) sendMessageAsync(addr string, brokerName string, msg *Message,
+func (m *defaultMqClient) sendMessageAsync(addr string, brokerName string, msg internalMessage,
 	remotingCommand *RemotingCommand, sendCallback SendCallback, topicPublishInfo *TopicPublishInfo, times int) (err error) {
 	invokeCallback := func(responseFuture *ResponseFuture) {
 		var sendResult *SendResult
@@ -175,7 +174,7 @@ func (m *defaultMqClient) sendMessageAsync(addr string, brokerName string, msg *
 	return
 }
 
-func (d *defaultMqClient) processSendResponse(brokerName string, msg *Message, response *RemotingCommand) (sendResult *SendResult, err error) {
+func (d *defaultMqClient) processSendResponse(brokerName string, msg internalMessage, response *RemotingCommand) (sendResult *SendResult, err error) {
 	var sendStatus int
 
 	if response == nil {
@@ -198,7 +197,7 @@ func (d *defaultMqClient) processSendResponse(brokerName string, msg *Message, r
 	case Success:
 		sendStatus = SendStatusOK
 		responseHeader := response.decodeCommandCustomHeader()
-		messageQueue := newMessageQueue(msg.Topic, brokerName, responseHeader.queueId)
+		messageQueue := newMessageQueue(msg.GetTopic(), brokerName, responseHeader.queueId)
 
 		sendResult = NewSendResult(sendStatus, msg.GetProperty(UniqKey), responseHeader.msgId, messageQueue, responseHeader.queueOffset)
 		sendResult.TransactionId = responseHeader.transactionId
@@ -471,7 +470,7 @@ func (m *defaultMqClient) lockMq(groupName string, mq *messageQueue) error {
 }
 
 func (m *defaultMqClient) sendHeartbeatToAllBrokerWithLock() error {
-	logger.Info("Send heartbeat")
+	logger.Debug("start heartbeat")
 	heartbeatData := m.prepareHeartbeatData()
 	if len(heartbeatData.ConsumerDataSet) == 0 {
 		logger.Debug("conumer nil")
@@ -509,7 +508,6 @@ func (m *defaultMqClient) startScheduledTask() {
 	m.updateTopicRouteInfoFromNameServer()
 	// 定时更新topic
 	go func() {
-
 		updateTopicRouteTimer := time.NewTimer(5 * time.Second)
 		uflag := true
 		for uflag {
@@ -520,27 +518,27 @@ func (m *defaultMqClient) startScheduledTask() {
 			case <-m.ch:
 				uflag = false
 			}
-
 		}
 	}()
 
 	// 心跳保持
-	go func() {
-		heartbeatTimer := time.NewTimer(10 * time.Second)
-		m.sendHeartbeatToAllBrokerWithLock()
-		hflag := true
-		for hflag {
-			select {
-			case <-heartbeatTimer.C:
-				m.sendHeartbeatToAllBrokerWithLock()
-				heartbeatTimer.Reset(5 * time.Second)
-			case <-m.ch:
-				hflag = false
+	if m.consumer != nil {
+		go func() {
+			heartbeatTimer := time.NewTimer(10 * time.Second)
+			m.sendHeartbeatToAllBrokerWithLock()
+			hflag := true
+			for hflag {
+				select {
+				case <-heartbeatTimer.C:
+					m.sendHeartbeatToAllBrokerWithLock()
+					heartbeatTimer.Reset(5 * time.Second)
+				case <-m.ch:
+					hflag = false
+				}
+
 			}
-
-		}
-	}()
-
+		}()
+	}
 }
 
 func (m *defaultMqClient) getOffset(groupName string, mq *messageQueue) (int64, error) {
@@ -606,8 +604,9 @@ func (m *defaultMqClient) findBrokerAddressInPublish(brokerName string) string {
 	tmpMap := m.brokerAddrTable[brokerName]
 	if len(tmpMap) != 0 {
 		brokerName = tmpMap[strconv.Itoa(masterID)]
+		return brokerName
 	}
-	return brokerName
+	return ""
 }
 
 func (m *defaultMqClient) registerConsumer(consumer *DefaultConsumer) {

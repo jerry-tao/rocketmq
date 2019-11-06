@@ -97,11 +97,11 @@ func (c *DefaultConsumer) Shutdown() bool {
 	c.m.Lock()
 	defer c.m.Unlock()
 	if c.running {
+		//TODO unlock mq
 		c.running = false
 		close(c.closeCh)
 		c.wg.Wait()                // 等待所有goroutine退出
 		c.offsetStore.persistAll() // 最后更新offset
-		//TODO unlock mq
 		c.rebalance.shutdown()
 		c.mqClient.shutdown()
 		return true
@@ -127,14 +127,11 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			return
 		}
 
-		if responseFuture == nil {
-			logger.Error("response nil")
-			return
-		}
+		if responseFuture == nil || responseFuture.err != nil {
 
-		if responseFuture.err != nil {
 			logger.Error("pull message error,", pullRequest, responseFuture.err, "now retry")
-			c.pullMessageService.pullRequestQueue <- pullRequest
+			c.offsetStore.persist(pullRequest.messageQueue, true)
+			c.rebalance.unlockMq(c.consumerGroup, pullRequest.messageQueue)
 			return
 		}
 
@@ -151,7 +148,6 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 						nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
 						if err != nil {
 							logger.Error(err)
-							return
 						}
 					}
 				}
@@ -160,8 +156,7 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			msgs := responseFuture.responseCommand.decodeMessage()
 			err = c.messageListener(msgs)
 			if err != nil {
-				// TODO consider stop consume?
-				logger.Error("consume error: ", err)
+				logger.Error(err)
 			} else {
 				c.offsetStore.updateOffset(pullRequest.messageQueue, nextBeginOffset, false)
 			}
@@ -186,8 +181,8 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 					}
 				}
 			}
+			time.Sleep(time.Second * 1)
 		} else {
-			//logger.Error(fmt.Sprintf("pull message error,code=%d,body=%s", responseCommand.Code, string(responseCommand.Body)))
 			//time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
 			//if pullRequest.suspend < maxSuspend {
 			//	pullRequest.suspend = pullRequest.suspend * 2
@@ -197,7 +192,7 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 		if !pullRequest.messageQueue.lock {
 			logger.Info(c.mqClient.id(), "Release lock for ", pullRequest.messageQueue, "offset with ", c.offsetStore.readOffset(pullRequest.messageQueue, readFromMemory))
 			c.offsetStore.persist(pullRequest.messageQueue, true)
-			c.mqClient.unlockMq(c.consumerGroup, pullRequest.messageQueue)
+			c.rebalance.unlockMq(c.consumerGroup, pullRequest.messageQueue)
 			return
 		}
 		pullRequest.nextOffset = nextBeginOffset

@@ -170,14 +170,17 @@ func (t *TopicPublishInfo) ok() (ok bool) {
 
 func (t *TopicPublishInfo) selectOneMessageQueue(lastBrokerName string) (messageQueue *messageQueue) {
 	mqCnt := len(t.messageQueueList)
-	messageQueue = t.messageQueueList[rand.Intn(mqCnt)]
+	// 重试的时候lastBrokerName才不为空，所以重试应该换一个新的brokerName的mq
+	retryIndex := make([]int, 0, mqCnt)
 	if lastBrokerName != "" {
 		for i := 0; i < mqCnt; i++ {
-			if lastBrokerName == t.messageQueueList[i].brokerName {
-				messageQueue = t.messageQueueList[i]
-				return
+			if lastBrokerName != t.messageQueueList[i].brokerName { //
+				retryIndex = append(retryIndex, i)
 			}
 		}
+		messageQueue = t.messageQueueList[retryIndex[rand.Intn(len(retryIndex))]]
+		return
 	}
+	messageQueue = t.messageQueueList[rand.Intn(mqCnt)]
 	return
 }

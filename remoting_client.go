@@ -1,7 +1,6 @@
 package rocketmq
 
 import (
-	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -160,6 +159,8 @@ func (d *DefaultRemotingClient) connect(addr string) (conn net.Conn, err error) 
 			d.connTable[addr] = newConn
 			go d.handleConn(newConn, addr)
 			conn = newConn
+		} else {
+			newConn.Close()
 		}
 	}
 	return conn, nil
@@ -190,10 +191,12 @@ func (d *DefaultRemotingClient) InvokeSync(addr string, request *RemotingCommand
 		logger.Error("invokeSync:err", err)
 		return nil, err
 	}
+	t := time.NewTimer(time.Duration(timeoutMillis) * time.Millisecond)
+	defer func() { t.Stop() }()
 	select {
 	case <-response.done:
 		return response.responseCommand, nil
-	case <-time.After(time.Duration(timeoutMillis) * time.Millisecond):
+	case <-t.C:
 		return nil, errors.New("invoke sync timeout")
 	}
 
@@ -260,12 +263,7 @@ func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 					response.invokeCallback(response)
 				}
 			} else {
-				jsonCmd, err := json.Marshal(cmd)
-
-				if err != nil {
-					logger.Error(err)
-				}
-				logger.Info(string(jsonCmd))
+				logger.Info("Response has no callback maybe over timeout")
 			}
 		}
 

@@ -25,6 +25,7 @@ func getLocalIP4() net.IP {
 	addresses, err := net.InterfaceAddrs()
 
 	if err != nil {
+		logger.Error("Unable to get local ip address:", err)
 		return []byte{0, 0, 0, 0}
 	}
 

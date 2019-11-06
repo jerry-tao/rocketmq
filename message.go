@@ -2,6 +2,7 @@ package rocketmq
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"strconv"
 )
@@ -19,11 +20,103 @@ const (
 	CharacterMaxLength = 255
 )
 
+type internalMessage interface {
+	GetTopic() string
+	GetBody() []byte
+	PropertiesString() string
+	GetFlag() int32
+	GetProperty(key string) string
+	Batch() bool
+	Size() int
+}
+
+type BatchMessage []*Message
+
+func (bm BatchMessage) Size() int {
+	size := 0
+	for _, msg := range bm {
+		size = size + len(msg.Body)
+	}
+	return size
+}
+
+func (bm BatchMessage) Batch() bool {
+	return true
+}
+
+func (bm BatchMessage) GetTopic() string {
+	return bm[0].Topic
+}
+
+func (bm BatchMessage) GetBody() []byte {
+	return bm.Body()
+}
+
+func (bm BatchMessage) PropertiesString() string {
+	return ""
+}
+
+func (bm BatchMessage) GetFlag() int32 {
+	return 0
+}
+
+func (bm BatchMessage) GetProperty(key string) string {
+	return ""
+}
+
+func (bm BatchMessage) Body() []byte {
+	buf := bytes.NewBuffer([]byte{})
+	for _, msg := range bm {
+		buf.Write(encode(msg))
+	}
+	return buf.Bytes()
+}
+
+func encode(msg *Message) []byte {
+	var mc, crc int32
+	strProper := messageProperties2String(msg.Properties)
+	size := 4 + 4 + 4 + 4 + 2 + len(msg.Body) + len(strProper)
+	buf := bytes.NewBuffer([]byte{})
+	binary.Write(buf, binary.BigEndian, int32(size))
+	binary.Write(buf, binary.BigEndian, mc)
+	binary.Write(buf, binary.BigEndian, crc)
+	binary.Write(buf, binary.BigEndian, msg.Flag)
+	binary.Write(buf, binary.BigEndian, int32(len(msg.Body)))
+	buf.Write(msg.Body)
+	binary.Write(buf, binary.BigEndian, int16(len(strProper)))
+	buf.WriteString(strProper)
+	return buf.Bytes()
+}
+
 type Message struct {
 	Topic      string
 	Flag       int32
 	Properties map[string]string
 	Body       []byte
+}
+
+func (m *Message) Size() int {
+	return len(m.Body)
+}
+
+func (m *Message) GetTopic() string {
+	return m.Topic
+}
+
+func (m *Message) Batch() bool {
+	return false
+}
+
+func (m *Message) GetBody() []byte {
+	return m.Body
+}
+
+func (m *Message) PropertiesString() string {
+	return messageProperties2String(m.Properties)
+}
+
+func (m *Message) GetFlag() int32 {
+	return m.Flag
 }
 
 func NewMessage(topic string, body []byte) *Message {
@@ -47,6 +140,81 @@ type MessageExt struct {
 	BodyCRC                   int32
 	ReconsumeTimes            int32
 	PreparedTransactionOffset int64
+}
+
+func decodeMessage(data []byte) []*MessageExt {
+	buf := bytes.NewBuffer(data)
+	var storeSize, magicCode, bodyCRC, queueId, flag, sysFlag, reconsumeTimes, bodyLength, bornPort, storePort int32
+	var queueOffset, physicOffset, preparedTransactionOffset, bornTimeStamp, storeTimestamp int64
+	var topicLen byte
+	var topic, body, properties, bornHost, storeHost []byte
+	var propertiesLength int16
+
+	// var propertiesMap map[string]string
+
+	msgs := make([]*MessageExt, 0, 32)
+	for buf.Len() > 0 {
+		msg := new(MessageExt)
+		binary.Read(buf, binary.BigEndian, &storeSize)
+		binary.Read(buf, binary.BigEndian, &magicCode)
+		binary.Read(buf, binary.BigEndian, &bodyCRC)
+		binary.Read(buf, binary.BigEndian, &queueId)
+		binary.Read(buf, binary.BigEndian, &flag)
+		binary.Read(buf, binary.BigEndian, &queueOffset)
+		binary.Read(buf, binary.BigEndian, &physicOffset)
+		binary.Read(buf, binary.BigEndian, &sysFlag)
+		binary.Read(buf, binary.BigEndian, &bornTimeStamp)
+		bornHost = make([]byte, 4)
+		binary.Read(buf, binary.BigEndian, &bornHost)
+		binary.Read(buf, binary.BigEndian, &bornPort)
+		binary.Read(buf, binary.BigEndian, &storeTimestamp)
+		storeHost = make([]byte, 4)
+		binary.Read(buf, binary.BigEndian, &storeHost)
+		binary.Read(buf, binary.BigEndian, &storePort)
+		binary.Read(buf, binary.BigEndian, &reconsumeTimes)
+		binary.Read(buf, binary.BigEndian, &preparedTransactionOffset)
+		binary.Read(buf, binary.BigEndian, &bodyLength)
+		if bodyLength > 0 {
+			body = make([]byte, bodyLength)
+			binary.Read(buf, binary.BigEndian, body)
+		}
+		binary.Read(buf, binary.BigEndian, &topicLen)
+		topic = make([]byte, int(topicLen))
+		binary.Read(buf, binary.BigEndian, topic)
+		binary.Read(buf, binary.BigEndian, &propertiesLength)
+
+		var propertiesMap map[string]string
+
+		if propertiesLength > 0 {
+			properties = make([]byte, propertiesLength)
+			binary.Read(buf, binary.BigEndian, properties)
+			propertiesMap = string2messageProperties(properties)
+		}
+
+		if magicCode != -626843481 {
+			logger.Infof("magic code is error %d", magicCode)
+			return nil
+		}
+
+		msg.Topic = string(topic)
+		msg.QueueId = queueId
+		msg.SysFlag = sysFlag
+		msg.QueueOffset = queueOffset
+		msg.BodyCRC = bodyCRC
+		msg.StoreSize = storeSize
+		msg.BornTimestamp = bornTimeStamp
+		msg.ReconsumeTimes = reconsumeTimes
+		msg.Flag = flag
+		//msg.commitLogOffset=physicOffset
+		msg.StoreTimestamp = storeTimestamp
+		msg.PreparedTransactionOffset = preparedTransactionOffset
+		msg.Body = body
+		msg.Properties = propertiesMap
+
+		msgs = append(msgs, msg)
+	}
+
+	return msgs
 }
 
 // FIXME 返回始终为空 binary.Write不能用在[]byte类型上
@@ -111,8 +279,8 @@ func checkTopic(topic string) (err error) {
 
 func (m *Message) SetProperty(key, value string) {
 	if m.Properties == nil {
-		m.Properties = make(map[string]string)
-	}
+      m.Properties = make(map[string]string)
+  }
 	m.Properties[key] = value
 }
 
@@ -133,6 +301,7 @@ type SendMessageRequestHeader struct {
 	ReconsumeTimes        int    `json:"reconsumeTimes"`
 	UnitMode              bool   `json:"unitMode"`
 	MaxReconsumeTimes     int    `json:"maxReconsumeTimes"`
+	Batch                 bool   `json:"batch"`
 }
 
 const (

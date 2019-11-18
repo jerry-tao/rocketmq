@@ -135,7 +135,6 @@ func (r *AllocateMessageQueueAveragely) allocate(consumerGroup string, currentCI
 func (r *Rebalance) rebalanceByTopic(topic string) error {
 	cidAll, err := r.mqClient.findConsumerIdList(topic, r.groupName)
 	if err != nil {
-		logger.Error(err)
 		return err
 	}
 
@@ -155,7 +154,6 @@ func (r *Rebalance) rebalanceByTopic(topic string) error {
 	allocateResult, err := r.allocateMessageQueueStrategy.allocate(r.groupName, r.mqClient.id(), info.mqs, cidAll)
 	logger.Debug(r.mqClient.id(), allocateResult)
 	if err != nil {
-		logger.Error(err)
 		return err
 	}
 
@@ -180,7 +178,7 @@ func (r *Rebalance) updateProcessQueueTableInRebalance(topic string, mqSet map[s
 				k.lock = true
 				r.consumer.pullMessageService.pullRequestQueue <- pullRequest
 			} else {
-				logger.Debug(err)
+				logger.Info("lock mq fail:",err," wait for next reblance.")
 			}
 
 		}

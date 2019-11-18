@@ -129,7 +129,7 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 
 		if responseFuture == nil || responseFuture.err != nil {
 
-			logger.Error("pull message error,", pullRequest, responseFuture.err, "now retry")
+			logger.Error("pull message error,", pullRequest, responseFuture.err, ", now remove mq, wait for next reblance")
 			c.offsetStore.persist(pullRequest.messageQueue, true)
 			c.rebalance.unlockMq(c.consumerGroup, pullRequest.messageQueue)
 			return
@@ -147,7 +147,7 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 					if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
 						nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
 						if err != nil {
-							logger.Error(err)
+							logger.Error("parse offset fail", err)
 						}
 					}
 				}
@@ -156,19 +156,13 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 			msgs := responseFuture.responseCommand.decodeMessage()
 			err = c.messageListener(msgs)
 			if err != nil {
-				logger.Error(err)
+				logger.Error("client callback with err:", err, " wont update offset.")
 			} else {
 				c.offsetStore.updateOffset(pullRequest.messageQueue, nextBeginOffset, false)
 			}
 		} else if responseCommand.Code == PullNotFound {
-			// 当前无消息，sleep 1~16s
-			//logger.Infof("No new message sleep %d ms", pullRequest.suspend)
-			//time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
-			//if pullRequest.suspend < maxSuspend {
-			//	pullRequest.suspend = pullRequest.suspend * 2
-			//}
 		} else if responseCommand.Code == PullRetryImmediately || responseCommand.Code == PullOffsetMoved {
-			logger.Infof("pull message error,code=%d,request=%v", responseCommand.Code, pullRequest)
+			logger.Error("pull message error,code=%d,request=%v", responseCommand.Code, pullRequest)
 			var err error
 			pullResult, ok := responseCommand.ExtFields.(map[string]interface{})
 			if ok {
@@ -176,17 +170,18 @@ func (c *DefaultConsumer) makeCallback(pullRequest *PullRequest) InvokeCallback 
 					if nextBeginOffsetStr, ok := nextBeginOffsetInter.(string); ok {
 						nextBeginOffset, err = strconv.ParseInt(nextBeginOffsetStr, 10, 64)
 						if err != nil {
-							logger.Error(err)
+							logger.Error("parse offset fail", err)
 						}
 					}
 				}
 			}
 			time.Sleep(time.Second * 1)
 		} else {
-			//time.Sleep(time.Millisecond * time.Duration(pullRequest.suspend))
-			//if pullRequest.suspend < maxSuspend {
-			//	pullRequest.suspend = pullRequest.suspend * 2
-			//}
+			// 包括sys error和sys busy等情况 暂时移除，等待下次reblance
+			logger.Error("pull message error,", pullRequest, responseFuture, unknownError(responseFuture.responseCommand.Code),", now remove mq, wait for next reblance")
+			c.offsetStore.persist(pullRequest.messageQueue, true)
+			c.rebalance.unlockMq(c.consumerGroup, pullRequest.messageQueue)
+			return
 		}
 
 		if !pullRequest.messageQueue.lock {

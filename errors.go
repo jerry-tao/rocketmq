@@ -16,6 +16,7 @@ var (
 	ErrUpdateTopic = errors.New("rocketmq: update topic failed")
 	ErrTopicInfo   = errors.New("rocketmq: topic info error")
 	ErrTimeout     = errors.New("rocketmq: timeout")
+	ErrShutdown    = errors.New("rocketmq: server shutdown")
 	ErrConfigNil   = errors.New("rocketmq: config can't be nil")
 	ErrNameSrv     = errors.New("rocketmq: namesrv can't be empty")
 	ErrGroup       = errors.New("rocketmq: group can't be empty, default_consumer or default_producer")

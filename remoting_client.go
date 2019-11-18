@@ -46,7 +46,11 @@ func NewDefaultRemotingClient() RemotingClient {
 	}
 }
 
+// 接收服务器主动发送的命令，无对应请求，目前唯一的使用是服务器发送订阅组新增consumer用来主动触发reblance.
 func (d *DefaultRemotingClient) RegisterResponse(opaque int32, callback InvokeCallback) {
+	if opaque >= 1000 || opaque <= 0 {
+		return
+	}
 	response := &ResponseFuture{
 		sendRequestOK:  false,
 		opaque:         opaque,
@@ -111,7 +115,7 @@ func (d *DefaultRemotingClient) scanResponseTable() {
 
 }
 
-// TODO remove to mq_client
+// 只要有一个namesrv可用即可
 func (d *DefaultRemotingClient) newNameSrvConn(addr string) (conn net.Conn, err error) {
 	d.connTableLock.Lock()
 	defer d.connTableLock.Unlock()
@@ -149,7 +153,6 @@ func (d *DefaultRemotingClient) connect(addr string) (conn net.Conn, err error) 
 	if !ok {
 		newConn, err := net.Dial("tcp", addr)
 		if err != nil {
-			logger.Error(err)
 			return nil, err
 		}
 		d.connTableLock.Lock()
@@ -160,7 +163,7 @@ func (d *DefaultRemotingClient) connect(addr string) (conn net.Conn, err error) 
 			go d.handleConn(newConn, addr)
 			conn = newConn
 		} else {
-			newConn.Close()
+			_ = newConn.Close()
 		}
 	}
 	return conn, nil
@@ -188,7 +191,6 @@ func (d *DefaultRemotingClient) InvokeSync(addr string, request *RemotingCommand
 
 	err = d.sendRequest(request, conn, addr)
 	if err != nil {
-		logger.Error("invokeSync:err", err)
 		return nil, err
 	}
 	t := time.NewTimer(time.Duration(timeoutMillis) * time.Millisecond)
@@ -204,7 +206,6 @@ func (d *DefaultRemotingClient) InvokeSync(addr string, request *RemotingCommand
 func (d *DefaultRemotingClient) InvokeAsync(addr string, request *RemotingCommand, timeoutMillis int64, invokeCallback InvokeCallback) (err error) {
 	conn, err := d.connect(addr)
 	if err != nil {
-		logger.Error(err)
 		return err
 	}
 
@@ -220,7 +221,6 @@ func (d *DefaultRemotingClient) InvokeAsync(addr string, request *RemotingComman
 
 	err = d.sendRequest(request, conn, addr)
 	if err != nil {
-		logger.Error(err)
 		return err
 	}
 	return nil
@@ -229,7 +229,6 @@ func (d *DefaultRemotingClient) InvokeOneway(addr string, request *RemotingComma
 
 	conn, err := d.connect(addr)
 	if err != nil {
-		logger.Error(err)
 		return err
 	}
 
@@ -244,6 +243,7 @@ func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 	resp, ok := d.responseTable.Load(cmd.Opaque)
 	d.responseTable.Delete(cmd.Opaque)
 	if ok {
+		// 这里不需要判断running，即使在shutdown过程中也尽量完成正常请求
 		response := resp.(*ResponseFuture)
 		response.responseCommand = cmd
 		if response.invokeCallback != nil {
@@ -254,6 +254,7 @@ func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 			close(response.done)
 		}
 	} else {
+		// 如果已经shutdown，服务器的命令也不需要关注。
 		if d.running {
 			resp, ok := d.responseTable.Load(int32(cmd.Code))
 			if ok {
@@ -263,7 +264,7 @@ func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 					response.invokeCallback(response)
 				}
 			} else {
-				logger.Info("Response has no callback maybe over timeout")
+				logger.Infof("can't find callback for %v, maybe timeout or receive server command", cmd)
 			}
 		}
 
@@ -271,13 +272,15 @@ func (d *DefaultRemotingClient) handleResponse(cmd *RemotingCommand) {
 }
 
 func (d *DefaultRemotingClient) handleConn(conn net.Conn, addr string) {
-
+	defer func() {
+		// make sure release conn.
+		d.releaseConn(addr, conn)
+	}()
 	decoder := newDecoder(conn)
 	for {
 		cmd := new(RemotingCommand)
 		err := decoder.Decode(cmd)
 		if err != nil {
-			d.releaseConn(addr, conn)
 			logger.Error("decode cmd fail:", err)
 			return
 		}
@@ -301,19 +304,27 @@ func (d *DefaultRemotingClient) sendRequest(request *RemotingCommand, conn net.C
 }
 
 func (d *DefaultRemotingClient) releaseAll() {
-	d.connTableLock.Lock()
-	defer d.connTableLock.Unlock()
 	for _, conn := range d.connTable {
-		conn.Close()
+		_ = conn.Close()
 	}
 }
 
 func (d *DefaultRemotingClient) cleanResponseTable() {
+	d.responseTable.Range(func(key, value interface{}) bool {
+		rf := value.(*ResponseFuture)
+		if rf.opaque >= 1000 || rf.opaque < 0 {
+			if rf.invokeCallback != nil {
+				rf.err = ErrShutdown
+				rf.invokeCallback(rf)
+			}
+		}
+		return true
+	})
 }
 
 func (d *DefaultRemotingClient) releaseConn(addr string, conn net.Conn) {
 	d.connTableLock.Lock()
-	conn.Close()
+	_ = conn.Close()
 	delete(d.connTable, addr)
 	d.connTableLock.Unlock()
 }

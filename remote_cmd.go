@@ -440,7 +440,6 @@ func (r *RemotingCommand) decodeMessage() []*MessageExt {
 		}
 
 		if magicCode != -626843481 {
-			logger.Debug(r)
 			logger.Errorf("magic code is error %d", magicCode)
 			return nil
 		}

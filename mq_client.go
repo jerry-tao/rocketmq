@@ -266,7 +266,7 @@ func (m *defaultMqClient) findConsumerIdList(topic string, groupName string) ([]
 	if !ok {
 		_, err := m.getTopic(topic, false)
 		if err != nil {
-			logger.Error(err)
+			return nil, err
 		}
 		brokerAddr, ok = m.findBrokerAddrByTopic(topic)
 	}
@@ -286,7 +286,6 @@ func (m *defaultMqClient) findConsumerIdListKernel(addr string, consumerGroup st
 
 	response, err := m.remotingClient.InvokeSync(addr, request, timeoutMillis)
 	if err != nil {
-		logger.Error(err)
 		return nil, err
 	}
 
@@ -296,7 +295,6 @@ func (m *defaultMqClient) findConsumerIdListKernel(addr string, consumerGroup st
 		bodyjson = strings.Replace(bodyjson, "1:", "\"1\":", -1)
 		err := json.Unmarshal([]byte(bodyjson), getConsumerListByGroupResponseBody)
 		if err != nil {
-			logger.Error(err)
 			return nil, err
 		}
 		return getConsumerListByGroupResponseBody.ConsumerIDList, nil
@@ -421,7 +419,7 @@ func (m *defaultMqClient) unlockMq(groupName string, mq *messageQueue) error {
 		remotingCommand := buildCommand(UNLockBatchMq, nil, data)
 		response, err := m.remotingClient.InvokeSync(brokerAddr, remotingCommand, 3000)
 		if err != nil {
-			logger.Error(err)
+			return err
 		} else {
 			if response == nil || response.Code != Success {
 				logger.Error(m.id(), "unlock failed")
@@ -445,14 +443,12 @@ func (m *defaultMqClient) lockMq(groupName string, mq *messageQueue) error {
 
 		data, err := json.Marshal(*lock)
 		if err != nil {
-			logger.Error(err)
 			return err
 		}
 		remotingCommand := buildCommand(LockBatchMq, nil, data)
 		logger.Debug("try lock mq ["+mq.topic, mq.queueId, "] to broker[", brokerAddr+"]")
 		response, err := m.remotingClient.InvokeSync(brokerAddr, remotingCommand, 3000)
 		if err != nil {
-			logger.Error(err)
 			return err
 		} else {
 			var result map[string][]interface{}
@@ -473,7 +469,6 @@ func (m *defaultMqClient) sendHeartbeatToAllBrokerWithLock() error {
 	logger.Debug("start heartbeat")
 	heartbeatData := m.prepareHeartbeatData()
 	if len(heartbeatData.ConsumerDataSet) == 0 {
-		logger.Debug("conumer nil")
 		return errors.New("send heartbeat error")
 	}
 
@@ -486,17 +481,12 @@ func (m *defaultMqClient) sendHeartbeatToAllBrokerWithLock() error {
 
 			data, err := json.Marshal(*heartbeatData)
 			if err != nil {
-				logger.Error(err)
 				return err
 			}
 			remotingCommand := buildCommand(HeartBeat, nil, data)
 			response, err := m.remotingClient.InvokeSync(addr, remotingCommand, 3000)
-			if err != nil {
-				logger.Error(err)
-			} else {
-				if response == nil || response.Code != Success {
-					logger.Error("send heartbeat response  error")
-				}
+			if err != nil || response == nil || response.Code != Success {
+				logger.Error("send heartbeat response  error:", err, " response:", response)
 			}
 		}
 	}
@@ -568,7 +558,6 @@ func (m *defaultMqClient) getOffsetKernel(addr string, requestHeader *QueryConsu
 
 	response, err := m.remotingClient.InvokeSync(addr, remotingCommand, timeoutMillis)
 	if err != nil {
-		logger.Error(err)
 		return 0, err
 	}
 	if response.Code == QueryNotFound {
@@ -580,7 +569,6 @@ func (m *defaultMqClient) getOffsetKernel(addr string, requestHeader *QueryConsu
 			if offsetStr, ok := offsetInter.(string); ok {
 				offset, err := strconv.ParseInt(offsetStr, 10, 64)
 				if err != nil {
-					logger.Error(err)
 					return 0, err
 				}
 				return offset, nil
@@ -588,15 +576,12 @@ func (m *defaultMqClient) getOffsetKernel(addr string, requestHeader *QueryConsu
 			}
 		}
 	}
-	logger.Error(requestHeader, response)
 	return 0, errors.New("query offset error")
 }
 
 func (m *defaultMqClient) updateConsumerOffsetOneway(addr string, header *UpdateConsumerOffsetRequestHeader, timeoutMillis int64) error {
 	remotingCommand := buildCommand(UpdateCconsumerOffset, header, nil)
-	res, err := m.remotingClient.InvokeSync(addr, remotingCommand, timeoutMillis)
-	logger.Debug(res)
-	return err
+	return m.remotingClient.InvokeOneway(addr, remotingCommand, timeoutMillis)
 
 }
 

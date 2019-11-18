@@ -1,10 +1,12 @@
 package rocketmq
 
 import (
+	"errors"
 	"math/rand"
 	"os"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestNewMqClient(t *testing.T) {
@@ -60,6 +62,7 @@ func TestDefaultMqClient_sendMsg(t *testing.T) {
 	}
 }
 func TestDefaultMqClient_getTopicKernel(t *testing.T) {
+	SetLevel(testLogLevel)
 	tests := []struct {
 		name  string
 		topic string
@@ -302,37 +305,38 @@ func TestDefaultMqClient_getOffset(t *testing.T) {
 }
 
 func TestDefaultMqClient_findConsumerIdList(t *testing.T) {
-	//SetLevel(DebugLevel)
+	SetLevel(testLogLevel)
 	conf := &Config{
-		Namesrv:        "172.17.5.201:9876;172.17.5.203:9876",
+		Namesrv:        testNamesrvAddress,
 		PullMaxMsgNums: 32,
-		Group:          "2bconsumer690",
+		Group:          testConsumerGroup,
 	}
 	consumer, _ := NewDefaultConsumer(conf)
-	consumer.Subscribe("2myq", "*")
+	consumer.Subscribe(testConsumerTopic, "*")
 	consumer.RegisterMessageListener(
 		func(msgs []*MessageExt) error {
-			t.Log(msgs)
-			return nil
+			return errors.New("empty")
 		})
 	consumer.Start()
 
 	c2, _ := NewDefaultConsumer(conf)
-	c2.Subscribe("2myq", "*")
+	c2.Subscribe(testConsumerTopic, "*")
 	c2.RegisterMessageListener(
 		func(msgs []*MessageExt) error {
-			t.Log(msgs)
-			return nil
+			return errors.New("empty")
 		})
 	c2.Start()
 
+	// wait for other consumer send heartbeat
+	time.Sleep(time.Second*10)
+
 	var c1 = &defaultMqClient{
 		conf: &Config{
-			Namesrv:        "172.17.5.201:9876;172.17.5.203:9876",
+			Namesrv:        testNamesrvAddress,
 			PullMaxMsgNums: 32,
-			Group:          "2bconsumer690",
+			Group:          testConsumerGroup,
 		},
-		namesrv:         "172.17.5.201:9876;172.17.5.203:9876",
+		namesrv:         testNamesrvAddress,
 		brokerAddrTable: make(map[string]map[string]string),
 		topics:          map[string]*topicInfo{},
 		clientId:        localIP.String() + "@" + strconv.Itoa(os.Getpid()) + "@" + strconv.FormatInt(rand.Int63(), 10),
@@ -340,10 +344,9 @@ func TestDefaultMqClient_findConsumerIdList(t *testing.T) {
 		remotingClient:  NewDefaultRemotingClient(),
 	}
 	c1.start()
-	res, err := c1.findConsumerIdList("2myq", "2bconsumer690")
-	t.Log(res)
-	t.Log(err)
-	if err != nil || len(res) == 0 {
+	res, err := c1.findConsumerIdList(testConsumerTopic, testConsumerGroup)
+	//
+	if err != nil || len(res) != 2 {
 		t.Fatal("find consumer list fail")
 	}
 }

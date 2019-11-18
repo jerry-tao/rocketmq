@@ -9,6 +9,7 @@ type Producer interface {
 	Start()
 	Shutdown()
 	Send(msg *Message) (*SendResult, error)
+	// 批量推送官方貌似并没有限制单次最大数量，试了10000也可以
 	BatchSend(msgs BatchMessage) (*SendResult, error)
 	SendAsync(msg *Message, sendCallback SendCallback) error
 }

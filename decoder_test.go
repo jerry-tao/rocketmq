@@ -2,6 +2,7 @@ package rocketmq
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -12,10 +13,28 @@ func TestDecoder(t *testing.T) {
 	der2 := newDecoder(r2)
 	var cmd RemotingCommand
 	err := der2.Decode(&cmd)
-	t.Log(cmd)
 	if err != nil {
 		t.Log(err)
 		t.Fail()
 	}
 
+}
+
+type mockReader string
+
+var boom = errors.New("boom")
+
+func (*mockReader) Read(b []byte) (n int, err error) {
+	return 0, boom
+}
+
+
+func TestDecoderError(t *testing.T) {
+	der2 := newDecoder(new(mockReader))
+	var cmd RemotingCommand
+	err := der2.Decode(&cmd)
+	if err != boom {
+		t.Log(err)
+		t.Fail()
+	}
 }

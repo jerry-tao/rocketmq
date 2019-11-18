@@ -11,6 +11,7 @@ const (
 	cmdLength
 	cmdEnd
 )
+var errInvalid = errors.New("not at beginning of value, try use a brand new decoder.")
 
 // not for concurrent usage.
 type cmdDecoder struct {
@@ -76,8 +77,9 @@ func (dec *cmdDecoder) readValue() error {
 	return err
 }
 
+// 如果decode返回了err，这个时候应该检查reader，并且重新新建一个decoder，而不是继续使用出错的decoder，
 func (dec *cmdDecoder) Decode(cmd *RemotingCommand) error {
-
+	// if use invalid bytes, it will panic with slice bounds out of range. so consider validation reader?
 	if dec.tokenState != cmdStart {
 		return errors.New("not at beginning of value")
 	}

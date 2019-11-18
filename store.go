@@ -42,7 +42,7 @@ func (r *RemoteOffsetStore) readOffset(mq *messageQueue, readType int) int64 {
 	case readFromStore:
 		offset, err := r.mqClient.getOffset(r.groupName, mq)
 		if err != nil {
-			logger.Error(err)
+			logger.Error("get remote offset fail:",err)
 			return -1
 		}
 		r.updateOffset(mq, offset, false)
@@ -58,7 +58,7 @@ func (r *RemoteOffsetStore) persist(mq *messageQueue, remove bool) {
 	if ok {
 		err := r.mqClient.updateOffset(r.groupName, mq, offset.(int64))
 		if err != nil {
-			logger.Error(err)
+			logger.Error("persist mq offset fail:",err)
 		}
 
 		if remove {

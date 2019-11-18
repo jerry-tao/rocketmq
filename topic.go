@@ -29,7 +29,7 @@ func (info *topicInfo) empty() bool {
 }
 
 func (info *topicInfo) expired() bool {
-	return time.Now().Unix()-info.timestamp > 5*60
+	return time.Now().Unix()-info.timestamp > 60
 }
 
 func (info *topicInfo) equal(other *topicInfo) bool {
@@ -104,13 +104,15 @@ func (info *topicInfo) buildPublishInfo() {
 	}
 	for _, queueData := range info.QueueDatas {
 		var i int32
-		for i = 0; i < queueData.ReadQueueNums; i++ {
-			mq := &messageQueue{
-				topic:      info.topic,
-				brokerName: queueData.BrokerName,
-				queueId:    i,
+		if queueData.Perm >= 4 {
+			for i = 0; i < queueData.ReadQueueNums; i++ {
+				mq := &messageQueue{
+					topic:      info.topic,
+					brokerName: queueData.BrokerName,
+					queueId:    i,
+				}
+				info.mqs = append(info.mqs, mq)
 			}
-			info.mqs = append(info.mqs, mq)
 		}
 	}
 }
